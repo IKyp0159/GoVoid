@@ -1,0 +1,30 @@
+# binarios
+*.exe
+*.dll
+*.sys
+*.node
+
+# salida del compilador de clientes
+/dist/
+*.zip
+ENTREGA.txt
+SHA256SUMS.txt
+
+# perfiles y volcados
+*.pprof
+*.test
+*.out
+*.log
+
+# credenciales locales: nunca al repo
+*.env
+.env*
+config.local.json
+studio.json
+
+# temporales de herramientas
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
