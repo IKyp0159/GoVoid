@@ -23,14 +23,6 @@ build_studio.bat
 
 Compila Studio, inyecta los recursos y deja una copia en `dist/`.
 
-Para un agente con credenciales propias:
-
-```
-build_agent.bat
-```
-
-Lee `agent.local.env` (`GOVOID_TOKEN`, `GOVOID_GUILD`, `GOVOID_WEBHOOK`). Las credenciales nunca van al código.
-
 ## GoVoid Studio
 
 Descarga el `.exe` desde [Releases](../../releases) y ejecútalo. No necesita instalador ni Go.
