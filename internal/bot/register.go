@@ -53,6 +53,21 @@ func registerCommands(s *discordgo.Session) error {
 			},
 		},
 		{
+			Name:        "google",
+			Description: "Cierra las sesiones de Google de todos los perfiles (mata Chrome)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "action",
+					Description: "close",
+					Required:    true,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "close", Value: "close"},
+					},
+				},
+			},
+		},
+		{
 			Name:        "sysinfo",
 			Description: "Información del sistema",
 		},
