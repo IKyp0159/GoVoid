@@ -29,9 +29,11 @@ func Chunk(s string, size int) []string {
 		if cut <= 0 {
 			cut = size
 		}
-		cut = runeBoundary(remaining, cut)
-		if cut <= 0 {
-			cut = runeBoundary(remaining, size)
+		// runeBoundary puede devolver 0 cuando la ventana entera es
+		// continuación de un rune (salida de consola no UTF-8). Sin el corte
+		// seco el bucle no avanza y el comando se cuelga para siempre.
+		if cut = runeBoundary(remaining, cut); cut <= 0 {
+			cut = size
 		}
 		out = append(out, remaining[:cut])
 		remaining = strings.TrimPrefix(remaining[cut:], "\n")

