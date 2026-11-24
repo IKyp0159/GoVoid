@@ -54,7 +54,7 @@ func registerCommands(s *discordgo.Session) error {
 		},
 		{
 			Name:        "google",
-			Description: "Cierra las sesiones de Google de todos los perfiles (mata Chrome)",
+			Description: "Cierra las sesiones de Google de todos los perfiles",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
 					Type:        discordgo.ApplicationCommandOptionString,
@@ -272,11 +272,15 @@ func sameCommandSet(live []*discordgo.ApplicationCommand, wanted []*discordgo.Ap
 func commandSignature(command *discordgo.ApplicationCommand) string {
 	var out strings.Builder
 	out.WriteString(command.Name)
+	out.WriteString("#")
+	out.WriteString(command.Description)
 	for _, option := range command.Options {
 		out.WriteString("|")
 		out.WriteString(option.Name)
 		out.WriteString(":")
 		out.WriteString(strconv.Itoa(int(option.Type)))
+		out.WriteString(":")
+		out.WriteString(option.Description)
 		if option.Required {
 			out.WriteString("!")
 		}
