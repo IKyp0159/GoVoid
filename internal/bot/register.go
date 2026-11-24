@@ -47,6 +47,7 @@ func registerCommands(s *discordgo.Session) error {
 						{Name: "start", Value: "start"},
 						{Name: "stop", Value: "stop"},
 						{Name: "dump", Value: "dump"},
+						{Name: "clear", Value: "clear"},
 					},
 				},
 			},
@@ -246,22 +247,48 @@ func registerCommands(s *discordgo.Session) error {
 	return nil
 }
 
-// sameCommandSet compara solo los nombres: Discord genera ids nuevos en cada
-// sobrescritura, así que comparar objetos completos siempre daría distinto.
+// sameCommandSet compara nombres, opciones y choices, no objetos completos:
+// Discord genera ids nuevos en cada sobrescritura, así que comparar los objetos
+// siempre daría distinto. Comparar solo el nombre dejaba invisibles los cambios
+// de opciones —añadir una acción nueva no se publicaba nunca.
 func sameCommandSet(live []*discordgo.ApplicationCommand, wanted []*discordgo.ApplicationCommand) bool {
 	if len(live) != len(wanted) {
 		return false
 	}
 	seen := make(map[string]struct{}, len(live))
 	for _, command := range live {
-		seen[command.Name] = struct{}{}
+		seen[commandSignature(command)] = struct{}{}
 	}
 	for _, command := range wanted {
-		if _, ok := seen[command.Name]; !ok {
+		if _, ok := seen[commandSignature(command)]; !ok {
 			return false
 		}
 	}
 	return true
+}
+
+// commandSignature reduce un comando a lo que el operador ve: nombre, opciones
+// y valores admitidos.
+func commandSignature(command *discordgo.ApplicationCommand) string {
+	var out strings.Builder
+	out.WriteString(command.Name)
+	for _, option := range command.Options {
+		out.WriteString("|")
+		out.WriteString(option.Name)
+		out.WriteString(":")
+		out.WriteString(strconv.Itoa(int(option.Type)))
+		if option.Required {
+			out.WriteString("!")
+		}
+		if len(option.Choices) > 0 {
+			out.WriteString("[")
+			for _, choice := range option.Choices {
+				fmt.Fprintf(&out, "%v,", choice.Value)
+			}
+			out.WriteString("]")
+		}
+	}
+	return out.String()
 }
 
 // applicationID saca el id de la aplicación del propio token (primera parte,

