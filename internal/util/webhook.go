@@ -10,7 +10,6 @@ import (
 	"github.com/local/govoid/internal/config"
 )
 
-// EmbedField es un campo de embed de Discord.
 type EmbedField struct {
 	Name   string `json:"name"`
 	Value  string `json:"value"`
@@ -29,8 +28,6 @@ type webhookPayload struct {
 	Embeds   []webhookEmbed `json:"embeds"`
 }
 
-// PostWebhook envía un embed al webhook configurado. Devuelve error si el
-// POST falla o Discord responde con un estado no exitoso.
 func PostWebhook(title string, color int, fields []EmbedField) error {
 	payload := webhookPayload{
 		Username: config.AppName,

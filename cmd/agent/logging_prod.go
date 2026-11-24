@@ -11,8 +11,6 @@ import (
 	"github.com/local/govoid/internal/config"
 )
 
-// logPath es el diario del agente en release. Sin consola, un panic o un
-// fallo del bugcheck desaparecía sin rastro; con esto queda escrito.
 func logPath() string {
 	if programData := os.Getenv("ProgramData"); programData != "" {
 		return filepath.Join(programData, config.DataDirName, "agent.log")
@@ -30,7 +28,6 @@ func setupLogging() {
 		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 		return
 	}
-	// Un solo archivo, tope de 2 MB: el agente vive meses en la misma máquina.
 	if info, err := os.Stat(path); err == nil && info.Size() > 2<<20 {
 		_ = os.Rename(path, path+".old")
 	}

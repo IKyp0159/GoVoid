@@ -1,13 +1,5 @@
 //go:build windows
 
-// Comando builder: compila una copia de GoVoid con identidad propia.
-//
-// Es la versión de consola del armador. GoVoid Studio hace lo mismo con
-// interfaz; los dos comparten el motor de internal/kit, así que producen el
-// mismo binario byte a byte para la misma entrada.
-//
-// No ejecuta el agente: solo compila, comprueba la identidad grabada dentro del
-// binario y firma el paquete.
 package main
 
 import (

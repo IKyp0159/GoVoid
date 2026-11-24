@@ -2,13 +2,6 @@
 
 package main
 
-// Enlaces Win32 en crudo. La app no usa frameworks: ventana, controles
-// comunes, menú y diálogos son llamadas directas a user32/comctl32/comdlg32/
-// shell32. Cero CGO, cero dependencias nuevas.
-//
-// Cada función devuelve el valor tal cual lo entrega la API; el error de
-// syscall se ignora porque Win32 señala el fallo con 0/NULL, no con errno.
-
 import (
 	"golang.org/x/sys/windows"
 )
@@ -109,8 +102,6 @@ var (
 	procCoTaskMemFree       = ole32.NewProc("CoTaskMemFree")
 	procCoInitializeEx      = ole32.NewProc("CoInitializeEx")
 )
-
-// --- constantes ---
 
 const (
 	wsOverlappedWindow = 0x00CF0000
@@ -235,8 +226,6 @@ const (
 	gwlpWndProc = -4
 )
 
-// --- estructuras ---
-
 type wndClassEx struct {
 	cbSize        uint32
 	style         uint32
@@ -354,8 +343,6 @@ type paintStruct struct {
 	reserved  [32]byte
 }
 
-// --- ayudas ---
-
 func u16(value string) *uint16 {
 	ptr, err := windows.UTF16PtrFromString(value)
 	if err != nil {
@@ -378,11 +365,8 @@ func sysColorBrush(index int) uintptr {
 	return value
 }
 
-// dpiAware activa el modo por monitor. Si el sistema es viejo cae al modo
-// system-aware, que sigue evitando el escalado borroso.
 func dpiAware() {
 	if err := procSetProcessDPIAwareness.Find(); err == nil {
-		// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (HANDLE)-4
 		if result, _, _ := procSetProcessDPIAwareness.Call(^uintptr(3)); result != 0 {
 			return
 		}

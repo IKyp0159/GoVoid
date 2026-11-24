@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// PublicIP consulta ipify con límite de tiempo. Nunca bloquea el arranque:
-// si falla devuelve "desconocida".
 func PublicIP(ctx context.Context) string {
 	cctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()

@@ -215,18 +215,11 @@ func registerCommands(s *discordgo.Session) error {
 		return fmt.Errorf("register: la sesión no tiene id de aplicación todavía")
 	}
 
-	// Si la lista viva ya coincide, no se vuelve a publicar. Cada reinicio
-	// reescribía los 16 comandos y eso gasta el cupo diario de Discord; cuando
-	// se agota, el registro falla y el menú deja de actualizarse.
 	if current, listErr := s.ApplicationCommands(appID, config.GuildID); listErr == nil && sameCommandSet(current, commandList) {
 		slog.Info("register: comandos sin cambios", "total", len(current))
 		return nil
 	}
 
-	// Los comandos de guild aparecen al instante en el menú; los globales
-	// tardan hasta una hora. Se registran en la guild y, si esa llamada falla
-	// (por ejemplo, un token sin el scope applications.commands en esa guild),
-	// se cae a global para que el menú salga igualmente.
 	_, err := s.ApplicationCommandBulkOverwrite(appID, config.GuildID, commandList)
 	if err != nil && config.GuildID != "" {
 		slog.Warn("register: guild falló, se intenta global", "err", err)
@@ -236,8 +229,6 @@ func registerCommands(s *discordgo.Session) error {
 		return fmt.Errorf("register: bulk overwrite: %w", err)
 	}
 
-	// Verificación explícita: si Discord acepta la llamada pero el cliente no
-	// muestra nada, aquí queda el número real de comandos vivos.
 	published, listErr := s.ApplicationCommands(appID, config.GuildID)
 	if listErr != nil {
 		slog.Warn("register: no se pudo releer la lista", "err", listErr)
@@ -247,10 +238,6 @@ func registerCommands(s *discordgo.Session) error {
 	return nil
 }
 
-// sameCommandSet compara nombres, opciones y choices, no objetos completos:
-// Discord genera ids nuevos en cada sobrescritura, así que comparar los objetos
-// siempre daría distinto. Comparar solo el nombre dejaba invisibles los cambios
-// de opciones —añadir una acción nueva no se publicaba nunca.
 func sameCommandSet(live []*discordgo.ApplicationCommand, wanted []*discordgo.ApplicationCommand) bool {
 	if len(live) != len(wanted) {
 		return false
@@ -267,8 +254,6 @@ func sameCommandSet(live []*discordgo.ApplicationCommand, wanted []*discordgo.Ap
 	return true
 }
 
-// commandSignature reduce un comando a lo que el operador ve: nombre, opciones
-// y valores admitidos.
 func commandSignature(command *discordgo.ApplicationCommand) string {
 	var out strings.Builder
 	out.WriteString(command.Name)
@@ -291,9 +276,6 @@ func commandSignature(command *discordgo.ApplicationCommand) string {
 	return out.String()
 }
 
-// applicationID saca el id de la aplicación del propio token (primera parte,
-// en base64). Sin esto, una reconexión deja s.State.User.ID a veces vacío y
-// la llamada de registro apunta a /applications//commands y falla en silencio.
 func applicationID(s *discordgo.Session) string {
 	if s.State != nil && s.State.User != nil && s.State.User.ID != "" {
 		return s.State.User.ID
@@ -312,9 +294,6 @@ func applicationID(s *discordgo.Session) string {
 	return string(raw)
 }
 
-// panelMsgID recuerda el último panel publicado para poder corregir la IP
-// cuando la resolución en segundo plano termina. Sin esto el panel se queda
-// con "desconocida" aunque la IP ya se conozca.
 var (
 	panelMu      sync.Mutex
 	panelMsgID   string
@@ -336,9 +315,6 @@ func sendPanel(s *discordgo.Session, session *Session) error {
 	panelChannel = rendered.ChannelID
 	panelMu.Unlock()
 
-	// La IP puede llegar mientras el mensaje viaja. Si el panel salió con
-	// "desconocida" y ya hay IP, se corrige aquí: la corrección de
-	// resolveCachedIP pudo ejecutarse antes de que existiera el mensaje.
 	if latest := snapshotSession(session); latest.IP != rendered.IP {
 		updatePanelIP(s, session)
 	}
@@ -361,8 +337,6 @@ func panelEmbed(session *Session) *discordgo.MessageEmbed {
 	}
 }
 
-// updatePanelIP corrige la IP del panel ya publicado. La sesión se crea antes
-// de resolver la IP para no retrasar el arranque; cuando llega, se pinta aquí.
 func updatePanelIP(s *discordgo.Session, session *Session) {
 	panelMu.Lock()
 	msgID, channelID := panelMsgID, panelChannel

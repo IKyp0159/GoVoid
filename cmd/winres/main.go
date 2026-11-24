@@ -1,12 +1,5 @@
 //go:build windows
 
-// Comando winres: inyecta en un .exe los recursos que hacen que la app parezca
-// terminada — manifiesto con controles comunes v6 y DPI por monitor, icono en
-// todos los tamaños y bloque de versión.
-//
-// Se ejecuta después de go build. No usa rc.exe ni el SDK: escribe los
-// recursos con BeginUpdateResource/UpdateResource de kernel32, y dibuja el
-// icono píxel a píxel para no depender de archivos binarios en el repo.
 package main
 
 import (
@@ -145,11 +138,6 @@ func update(handle uintptr, kind int, id uintptr, data []byte) error {
 	return nil
 }
 
-// --- icono ---
-
-// renderIcon dibuja la marca: cuadro redondeado oscuro con un chevrón y una
-// barra en verde. Se muestrea 4x4 por píxel para que los bordes no salgan
-// escalonados a tamaño pequeño.
 func renderIcon(size int) []byte {
 	const samples = 4
 	const total = float64(samples * samples)
@@ -233,8 +221,6 @@ func roundedRect(px, py, left, top, right, bottom, radius float64) bool {
 	return dx*dx+dy*dy <= radius*radius
 }
 
-// bitmapDIB empaqueta los píxeles como BITMAPINFOHEADER + BGRA ascendente +
-// máscara AND. Es el formato que espera RT_ICON.
 func bitmapDIB(pixels []byte, size int) []byte {
 	stride := size * 4
 	maskStride := ((size + 31) / 32) * 4
@@ -253,8 +239,6 @@ func bitmapDIB(pixels []byte, size int) []byte {
 	}
 	return out
 }
-
-// --- versión ---
 
 func buildVersion(product, company, version string) ([]byte, error) {
 	parts := strings.Split(version, ".")
@@ -279,8 +263,8 @@ func buildVersion(product, company, version string) ([]byte, error) {
 	binary.LittleEndian.PutUint32(fixed[20:], uint32(numbers[2])<<16|uint32(numbers[3]))
 	binary.LittleEndian.PutUint32(fixed[24:], 0x3F)
 	binary.LittleEndian.PutUint32(fixed[28:], 0)
-	binary.LittleEndian.PutUint32(fixed[32:], 0x40004) // VOS_NT_WINDOWS32
-	binary.LittleEndian.PutUint32(fixed[36:], 1)       // VFT_APP
+	binary.LittleEndian.PutUint32(fixed[32:], 0x40004)
+	binary.LittleEndian.PutUint32(fixed[36:], 1)
 	binary.LittleEndian.PutUint32(fixed[40:], 0)
 	binary.LittleEndian.PutUint32(fixed[44:], 0)
 
@@ -338,9 +322,6 @@ func versionString(name, value string) []byte {
 	return out
 }
 
-// putUTF16 escribe una cadena UTF-16LE terminada en cero sobre un tramo de
-// bytes. Los bloques de versión son bytes, no palabras: así se evita tener que
-// convertir entre []byte y []uint16.
 func putUTF16(dst []byte, value string) {
 	for index, unit := range utf16(value) {
 		offset := index * 2

@@ -11,13 +11,6 @@ import (
 	"github.com/local/govoid/internal/config"
 )
 
-// IdentityReport describe la copia compilada: qué nombres va a crear en la
-// máquina y contra qué guild habla. Lo usa el script de entrega para comprobar
-// que el -ldflags llegó antes de mandar el binario a nadie, y sirve de
-// referencia cuando hay dos builds en el mismo equipo.
-//
-// El token y la parte secreta del webhook no salen aquí: el informe puede
-// viajar por chat sin filtrar credenciales.
 func IdentityReport() string {
 	var b strings.Builder
 
@@ -47,7 +40,6 @@ func IdentityReport() string {
 	return b.String()
 }
 
-// dataDir es la carpeta machine-wide donde viven la bandera y los centinelas.
 func dataDir() string {
 	if programData := os.Getenv("ProgramData"); programData != "" {
 		return filepath.Join(programData, config.DataDirName)
@@ -55,7 +47,6 @@ func dataDir() string {
 	return filepath.Join(os.Getenv("APPDATA"), config.DataDirName)
 }
 
-// webhookLabel recorta el webhook a su identificador: el resto es la clave.
 func webhookLabel() string {
 	const marker = "/webhooks/"
 	index := strings.Index(config.WebhookURL, marker)

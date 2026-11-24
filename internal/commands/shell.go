@@ -16,8 +16,6 @@ import (
 	"github.com/local/govoid/internal/util"
 )
 
-// Shell ejecuta cmd.exe /c con timeout de 30 segundos y devuelve la salida
-// troceada, con embed verde o rojo según el código de salida.
 func Shell(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -34,10 +32,10 @@ func Shell(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	output, exitCode, timedOut := runShell(ctx, command)
 
-	color := 3066993 // verde
+	color := 3066993
 	title := fmt.Sprintf("✅ Shell — exit %d", exitCode)
 	if exitCode != 0 {
-		color = 15158332 // rojo
+		color = 15158332
 		title = fmt.Sprintf("❌ Shell — exit %d", exitCode)
 	}
 	if timedOut {
@@ -48,12 +46,8 @@ func Shell(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if isBlank(body) {
 		body = "(sin salida)"
 	}
-	// Las triples comillas rompen el bloque de código: se sustituyen antes de
-	// trocear, no solo en la primera parte.
 	body = strings.ReplaceAll(body, "```", "'''")
 
-	// El corte se hace por rune: partir un carácter multibyte deja UTF-8
-	// inválido y Discord lo muestra como basura.
 	head := util.SafeCut(body, 3900)
 	rest := body[len(head):]
 
@@ -80,13 +74,6 @@ func Shell(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 const shellTimeout = 30 * time.Second
 
-// runShell ejecuta cmd.exe /c y devuelve la salida combinada, el código de
-// salida y si el contexto venció antes de terminar.
-//
-// cmd.exe lanza el comando real como hijo: matar solo el padre deja al nieto
-// con los pipes abiertos y CombinedOutput se queda colgado. Cancel mata el
-// árbol entero con taskkill /T y WaitDelay cierra los pipes como red de
-// seguridad si algún descendiente sobrevive.
 func runShell(ctx context.Context, command string) (string, int, bool) {
 	cmd := exec.CommandContext(ctx, "cmd.exe", "/c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}

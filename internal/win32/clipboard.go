@@ -29,7 +29,6 @@ var (
 
 const gmemMoveable = 0x0042
 
-// GetClipboardText lee CF_UNICODETEXT del portapapeles.
 func GetClipboardText() (string, error) {
 	available, _, _ := procIsClipboardFormatAv.Call(cfUnicodeText)
 	if available == 0 {
@@ -62,7 +61,6 @@ func GetClipboardText() (string, error) {
 	return windows.UTF16ToString(words), nil
 }
 
-// SetClipboardText escribe texto en el portapapeles como CF_UNICODETEXT.
 func SetClipboardText(text string) error {
 	utf16Text, err := windows.UTF16FromString(text)
 	if err != nil {

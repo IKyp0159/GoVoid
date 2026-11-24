@@ -8,25 +8,13 @@ import (
 )
 
 const (
-	// resolveTimeout acota la consulta DNS. Tras un bugcheck la pila de red
-	// responde tarde y sin tope el reintento se come el reloj.
 	resolveTimeout = 4 * time.Second
 
-	// dialTimeout acota el TCP posterior a la resolución.
 	dialTimeout = 5 * time.Second
 
-	// onlineInterval es el sondeo mientras no hay red. Tres segundos, no diez:
-	// el arranque tras pantalla azul se mide en segundos.
 	onlineInterval = 3 * time.Second
 )
 
-// IsOnline exige que discord.com resuelva y acepte TCP.
-//
-// No vale con que conteste una IP suelta. El cliente DNS de Windows guarda el
-// NXDOMAIN del primer intento —cuando la red todavía está dormida— y lo sirve
-// durante minutos. Un sondeo a 8.8.8.8 decía "hay red" mientras el gateway
-// seguía sin resolver, y el agente se pasaba cuatro minutos reintentando contra
-// un nombre que su propia caché daba por inexistente.
 func IsOnline() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
 	defer cancel()
@@ -49,13 +37,6 @@ func dialOK(addr string, timeout time.Duration) bool {
 	return true
 }
 
-// WaitUntilOnline bloquea hasta que IsOnline devuelve true o el contexto se
-// cancela.
-//
-// Limpia la caché DNS en cada intento impar. Ese flush es la pieza que devuelve
-// el agente en segundos después de un bugcheck: el primer lookup falla porque
-// la pila aún no está lista, Windows cachea el NXDOMAIN, y sin limpiarlo el
-// nombre sigue "no such host" hasta que expira el TTL del registro.
 func WaitUntilOnline(ctx context.Context) {
 	ticker := time.NewTicker(onlineInterval)
 	defer ticker.Stop()

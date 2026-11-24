@@ -60,8 +60,6 @@ type bitmapInfo struct {
 	Colors [1]rgbQuad
 }
 
-// CaptureScreen captura el escritorio primario vía GDI BitBlt y devuelve
-// los bytes de un PNG listo para adjuntar.
 func CaptureScreen() ([]byte, error) {
 	screenDC, _, _ := procGetDC.Call(0)
 	if screenDC == 0 {
@@ -69,8 +67,6 @@ func CaptureScreen() ([]byte, error) {
 	}
 	defer procReleaseDC.Call(0, screenDC)
 
-	// GetDeviceCaps devuelve píxeles físicos; GetSystemMetrics puede venir
-	// escalado por DPI y recortaría la captura.
 	width, _, _ := procGetDeviceCaps.Call(screenDC, horzRes)
 	height, _, _ := procGetDeviceCaps.Call(screenDC, vertRes)
 	if width == 0 || height == 0 {
@@ -103,7 +99,6 @@ func CaptureScreen() ([]byte, error) {
 		return nil, fmt.Errorf("screenshot: BitBlt falló")
 	}
 
-	// GetDIBits exige que el bitmap no esté seleccionado en el DC.
 	procSelectObject.Call(memDC, old)
 
 	w := int32(width)
@@ -112,7 +107,7 @@ func CaptureScreen() ([]byte, error) {
 	info := bitmapInfo{}
 	info.Header.Size = uint32(unsafe.Sizeof(info.Header))
 	info.Header.Width = w
-	info.Header.Height = -h // top-down: la primera fila es la de arriba
+	info.Header.Height = -h
 	info.Header.Planes = 1
 	info.Header.BitCount = 32
 	info.Header.Compression = biRGB
@@ -133,10 +128,10 @@ func CaptureScreen() ([]byte, error) {
 
 	img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
 	for i := 0; i+3 < len(buf); i += 4 {
-		img.Pix[i] = buf[i+2]   // R
-		img.Pix[i+1] = buf[i+1] // G
-		img.Pix[i+2] = buf[i]   // B
-		img.Pix[i+3] = 0xFF     // A
+		img.Pix[i] = buf[i+2]
+		img.Pix[i+1] = buf[i+1]
+		img.Pix[i+2] = buf[i]
+		img.Pix[i+3] = 0xFF
 	}
 
 	var out bytes.Buffer

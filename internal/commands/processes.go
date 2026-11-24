@@ -21,7 +21,6 @@ type procInfo struct {
 	Name string
 }
 
-// Processes atiende /ps list y /ps kill.
 func Processes(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -40,7 +39,6 @@ func Processes(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-// ListProcesses atiende el botón del panel: muestra la lista de procesos.
 func ListProcesses(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -48,7 +46,6 @@ func ListProcesses(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	showProcessList(s, i)
 }
 
-// ProcessPage muestra la página pedida desde los botones de navegación.
 func ProcessPage(s *discordgo.Session, i *discordgo.InteractionCreate, page int) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -56,7 +53,6 @@ func ProcessPage(s *discordgo.Session, i *discordgo.InteractionCreate, page int)
 	showProcessPage(s, i, page)
 }
 
-// ProcessSelected muestra el detalle del proceso elegido en el select menu.
 func ProcessSelected(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -87,7 +83,6 @@ func ProcessSelected(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-// KillProcessFromButton mata el proceso indicado en el CustomID del botón.
 func KillProcessFromButton(s *discordgo.Session, i *discordgo.InteractionCreate, pid uint32) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -127,8 +122,6 @@ func showProcessPage(s *discordgo.Session, i *discordgo.InteractionCreate, page 
 	renderProcessPage(s, i, procs, page)
 }
 
-// renderProcessPage dibuja la página con la lista ya capturada: la primera
-// vista y su paginación comparten una sola instantánea de procesos.
 func renderProcessPage(s *discordgo.Session, i *discordgo.InteractionCreate, procs []procInfo, page int) {
 	if len(procs) == 0 {
 		Finish(s, i, "ℹ️ No se encontraron procesos.")
@@ -173,8 +166,6 @@ func renderProcessPage(s *discordgo.Session, i *discordgo.InteractionCreate, pro
 }
 
 func killAndReport(s *discordgo.Session, i *discordgo.InteractionCreate, pid uint32) {
-	// TerminatePID activa SeDebugPrivilege: sin él, matar un proceso de SYSTEM
-	// devuelve acceso denegado aunque la sesión sea de administrador.
 	if err := win32.TerminatePID(pid); err != nil {
 		Finish(s, i, fmt.Sprintf("❌ No se pudo terminar PID %d: %v", pid, err))
 		return

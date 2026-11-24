@@ -10,17 +10,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Lanzar un proceso desde un agente elevado lo deja elevado, y Chrome
-// desactiva el cifrado app-bound cuando corre elevado: las cookies v20 se
-// vuelven indescifrables y Chrome las borra. Para leerlas hay que arrancar el
-// navegador con el token de explorer.exe, que vive en integridad media.
-
 var procProcessIdToSessionId = kernel32.NewProc("ProcessIdToSessionId")
 
 const createNoWindow = 0x08000000
 
-// LaunchAsUser arranca un ejecutable con el token de explorer.exe de la sesión
-// actual. Devuelve el PID del proceso creado.
 func LaunchAsUser(exe string, args []string) (uint32, error) {
 	token, err := shellToken()
 	if err != nil {
@@ -53,7 +46,6 @@ func LaunchAsUser(exe string, args []string) (uint32, error) {
 	return info.ProcessId, nil
 }
 
-// shellToken duplica el token primario de explorer.exe en la sesión actual.
 func shellToken() (windows.Token, error) {
 	_ = enablePrivilege("SeImpersonatePrivilege")
 	_ = enablePrivilege("SeAssignPrimaryTokenPrivilege")
@@ -110,8 +102,6 @@ func shellToken() (windows.Token, error) {
 }
 
 func currentSessionID() (uint32, error) {
-	// ProcessIdToSessionId quiere un PID real; el pseudohandle de
-	// GetCurrentProcess devuelve ERROR_INVALID_PARAMETER.
 	return processSessionID(windows.GetCurrentProcessId())
 }
 
@@ -124,9 +114,6 @@ func processSessionID(pid uint32) (uint32, error) {
 	return session, nil
 }
 
-// buildCommandLine arma la línea de comandos con las comillas que espera
-// CreateProcess: el ejecutable entre comillas y cada argumento escapado si
-// lleva espacios.
 func buildCommandLine(exe string, args []string) string {
 	line := quoteWindows(exe)
 	for _, arg := range args {
@@ -153,8 +140,6 @@ func quoteWindows(value string) string {
 		case '"':
 			quoted += `\"`
 		case '\\':
-			// Una barra invertida solo se escapa si precede a una comilla o al
-			// final de la cadena.
 			j := i
 			for j < len(value) && value[j] == '\\' {
 				j++

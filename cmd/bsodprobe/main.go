@@ -1,8 +1,5 @@
 //go:build windows
 
-// Comando de prueba del bugcheck. Corre el mismo TriggerBSOD que usa /bsod,
-// pero desde una consola con el resultado a la vista y a un archivo, para saber
-// si el camino destructivo devuelve error, mata el proceso o tumba la máquina.
 package main
 
 import (
@@ -30,8 +27,6 @@ func main() {
 
 	say("probe: arranque pid=%d", os.Getpid())
 
-	// Modo de solo lectura: informa qué bugcheck quedó registrado y si hay un
-	// aviso pendiente, sin tocar el token ni disparar nada.
 	if len(os.Args) > 1 && os.Args[1] == "check" {
 		code, when, err := win32.LastBugcheckCode()
 		say("check: codigo=%q hora=%q err=%v", code, when.Format(time.RFC3339), err)
@@ -44,8 +39,6 @@ func main() {
 		return
 	}
 
-	// La traza va al mismo archivo con Sync por línea: si la máquina cae a
-	// mitad del disparo, la última línea escrita dice qué paso la tumbó.
 	win32.SetBSODTrace(func(line string) { say("traza: %s", line) })
 
 	say("probe: diagnostico\n%s", win32.BSODDiagnostics())

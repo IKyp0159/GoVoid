@@ -13,8 +13,6 @@ import (
 
 var procMessageBoxW = windows.NewLazySystemDLL("user32.dll").NewProc("MessageBoxW")
 
-// MsgBox muestra un MessageBoxW en una goroutine separada para no bloquear
-// el handler de interacciones.
 func MsgBox(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -29,19 +27,16 @@ func MsgBox(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	flags := uintptr(0x00040000 | 0x00010000) // MB_TOPMOST | MB_SETFOREGROUND
+	flags := uintptr(0x00040000 | 0x00010000)
 	switch icon {
 	case "warn":
-		flags |= 0x00000030 // MB_ICONWARNING
+		flags |= 0x00000030
 	case "error":
-		flags |= 0x00000010 // MB_ICONERROR
+		flags |= 0x00000010
 	default:
-		flags |= 0x00000040 // MB_ICONINFORMATION
+		flags |= 0x00000040
 	}
 
-	// UTF16FromString devuelve la slice; el puntero se toma dentro de la
-	// goroutine y la slice se queda capturada. UTF16PtrFromString habría dejado
-	// un uintptr a memoria que el GC puede recoger mientras MessageBoxW espera.
 	textUTF16, err := windows.UTF16FromString(text)
 	if err != nil {
 		Finish(s, i, "❌ Texto inválido: "+err.Error())
@@ -54,8 +49,6 @@ func MsgBox(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 
 	go func() {
-		// La llamada bloquea hasta que el usuario cierra la ventana: por eso
-		// vive fuera del handler, que ya respondió a Discord.
 		procMessageBoxW.Call(
 			0,
 			uintptr(unsafe.Pointer(&textUTF16[0])),

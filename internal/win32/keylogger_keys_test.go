@@ -4,8 +4,6 @@ package win32
 
 import "testing"
 
-// TestSpecialLabelCubreNavegacion fija el bug del dump: 0x27 es la flecha
-// derecha, no un VK anónimo. Si alguna se cae del mapa, vuelve el [VK:0x27].
 func TestSpecialLabelCubreNavegacion(t *testing.T) {
 	cases := map[uint32]string{
 		0x25: "[LEFT]",
@@ -37,8 +35,6 @@ func TestSpecialLabelCubreNavegacion(t *testing.T) {
 	}
 }
 
-// TestSpecialLabelNoInventa: una tecla desconocida debe seguir cayendo al
-// genérico de record, no a una etiqueta falsa.
 func TestSpecialLabelNoInventa(t *testing.T) {
 	if label, ok := specialLabel(0xDF); ok {
 		t.Fatalf("VK 0xDF no debería tener etiqueta fija, salió %q", label)
@@ -65,7 +61,6 @@ func TestCtrlCombo(t *testing.T) {
 	}
 }
 
-// TestModificadoresNoSonTexto: Shift/Ctrl/Alt sueltos no ensucian el dump.
 func TestModificadoresNoSonTexto(t *testing.T) {
 	for _, vk := range modifierVKs {
 		if !isModifierKey(vk) {

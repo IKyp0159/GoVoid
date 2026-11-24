@@ -40,7 +40,6 @@ type memoryStatusEx struct {
 	AvailExtendedVirtual uint64
 }
 
-// SysInfo reúne hostname, usuario, OS, CPU, RAM, discos, IPs y uptime.
 func SysInfo(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -120,7 +119,7 @@ func diskList() string {
 			continue
 		}
 		driveType, _, _ := procGetDriveTypeW.Call(uintptr(unsafe.Pointer(rootPtr)))
-		if driveType != 2 && driveType != 3 { // removible o fijo
+		if driveType != 2 && driveType != 3 {
 			continue
 		}
 		var freeAvailable, total, totalFree uint64

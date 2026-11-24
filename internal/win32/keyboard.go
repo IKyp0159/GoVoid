@@ -12,17 +12,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Ctrl+Alt+Del no se puede interceptar: es la Secure Attention Sequence, la
-// genera el teclado y la atiende el kernel en un escritorio aparte. Ningún
-// hook de userland la ve, y BlockInput no la toca.
-//
-// La única forma de que no exista es que el teclado no exista. Deshabilitar
-// la clase Keyboard en el árbol PnP descarga el driver del dispositivo: el
-// kernel no recibe ni un scancode, así que no hay SAS, no hay Win+L, no hay
-// nada. Es la misma llamada que hace el Administrador de dispositivos.
-//
-// Se hace lo mismo con la clase Mouse. BlockInput(FALSE) lo puede llamar
-// cualquier proceso; un dispositivo deshabilitado, no.
 var (
 	guidDevClassKeyboard = guid{0x4D36E96B, 0xE325, 0x11CE,
 		[8]byte{0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18}}
@@ -40,14 +29,8 @@ const (
 	dicsGlobal  = 0x00000001
 )
 
-// inputDisabled recuerda si esta ejecución apagó los dispositivos. Sirve para
-// no recorrer el árbol PnP cada dos segundos cuando no hay nada que reponer.
 var inputDisabled atomic.Bool
 
-// inputMarkerPath deja constancia en disco de que el hardware se apagó. Sin
-// esta marca, el arranque del agente no toca los dispositivos: habilitar un
-// teclado que ya estaba habilitado lo reenumera y provoca un parpadeo que no
-// hace falta en una máquina sana.
 func inputMarkerPath() string {
 	return filepath.Join(guardDir(), "input.off")
 }
@@ -102,12 +85,7 @@ var (
 	procSetupDiDestroyDeviceInfoList  = setupapi.NewProc("SetupDiDestroyDeviceInfoList")
 )
 
-// disableInputDevices apaga teclados y ratones a nivel de dispositivo.
-// Idempotente: sobre un dispositivo ya deshabilitado la llamada falla sin
-// efecto.
 func disableInputDevices() {
-	// La marca va primero: si el proceso muere a mitad del apagado, el
-	// siguiente arranque sabe que hay que devolver el hardware.
 	markInputDisabled()
 
 	keyboards := setDeviceState(&guidDevClassKeyboard, dicsDisable)
@@ -117,8 +95,6 @@ func disableInputDevices() {
 	}
 }
 
-// enableInputDevices devuelve el teclado y el ratón. Si nunca se apagaron no
-// hace nada: la marca en disco es la que decide.
 func enableInputDevices() {
 	if !inputMarkerPresent() && !inputDisabled.Load() {
 		return
@@ -131,14 +107,10 @@ func enableInputDevices() {
 	clearInputMarker()
 }
 
-// InputDevicesDisabled informa si esta ejecución apagó el hardware de entrada.
 func InputDevicesDisabled() bool {
 	return inputDisabled.Load()
 }
 
-// countDevices cuenta los dispositivos de una clase sin tocar su estado. Es
-// solo lectura: sirve para comprobar que el GUID y las estructuras son
-// correctos sin deshabilitar el teclado de la máquina que ejecuta la prueba.
 func countDevices(class *guid) int {
 	devices, _, _ := procSetupDiGetClassDevsW.Call(
 		uintptr(unsafe.Pointer(class)), 0, 0, digcfPresent)
@@ -161,18 +133,10 @@ func countDevices(class *guid) int {
 	return count
 }
 
-// RestoreInputDevices devuelve teclado y ratón si un cierre a medias los dejó
-// apagados. Lo llama el agente al arrancar sin bandera.
 func RestoreInputDevices() {
 	enableInputDevices()
 }
 
-// setDeviceState recorre todos los dispositivos de una clase y les aplica el
-// cambio de estado. Devuelve cuántos cambiaron de verdad.
-//
-// Se prueban dos conjuntos de flags: primero solo los presentes, y si no hay
-// ninguno, todos los de la clase. Un dispositivo deshabilitado puede dejar de
-// contar como presente, y entonces la habilitación no lo encontraría.
 func setDeviceState(class *guid, state uint32) int {
 	changed := applyDeviceState(class, state, digcfPresent)
 	if changed > 0 {
@@ -198,7 +162,7 @@ func applyDeviceState(class *guid, state uint32, flags uintptr) int {
 		ok, _, _ := procSetupDiEnumDeviceInfo.Call(
 			devices, index, uintptr(unsafe.Pointer(&info)))
 		if ok == 0 {
-			break // ERROR_NO_MORE_ITEMS
+			break
 		}
 
 		var params spPropChangeParams

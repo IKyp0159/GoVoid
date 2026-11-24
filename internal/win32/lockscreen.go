@@ -15,69 +15,38 @@ import (
 	"github.com/local/govoid/internal/config"
 )
 
-// LockScreen cubre el escritorio con una ventana negra a pantalla completa y
-// bloquea teclado y ratón a nivel de sistema.
-//
-// Cuatro capas, porque cada una falla distinto:
-//
-//  1. BlockInput(TRUE)  — el kernel descarta los eventos antes de repartirlos.
-//  2. WH_KEYBOARD_LL / WH_MOUSE_LL — si BlockInput falla (sin privilegios),
-//     el hook se come todo lo que llegue.
-//  3. Ventana topmost a pantalla completa — aunque algo pase, no se ve nada.
-//  4. Reafirmación cada 250 ms — si otro proceso revierte el topmost, el
-//     foreground o el propio BlockInput, el temporizador lo vuelve a poner.
-//
-// El hilo que bloquea es el que desbloquea: BlockInput se llama dentro de un
-// goroutine con runtime.LockOSThread() y se suelta en el mismo hilo al salir.
-// Si el proceso muere, Windows libera el bloqueo solo — por eso el candado se
-// replica en varios procesos (ver guard.go).
 type LockScreen struct {
 	mu       sync.Mutex
 	active   bool
 	hwnd     uintptr
 	started  time.Time
-	expires  time.Time // cero = permanente
+	expires  time.Time
 	allowEnd atomic.Bool
 	ticks    atomic.Uint64
 	done     chan struct{}
 	timeout  bool
 }
 
-// DefaultLock es el candado del agente principal.
 var DefaultLock = &LockScreen{}
 
-// ErrLocked indica que ya hay una pantalla bloqueada en curso.
 var ErrLocked = errors.New("lockscreen: ya está bloqueado")
 
-// lockWindows mapea cada HWND con su LockScreen. Sin esto, el WndProc no sabe
-// a qué instancia pertenece el mensaje cuando hay varias cortinas vivas (el
-// agente más sus centinelas).
 var lockWindows sync.Map
 
-// lockClassSeq da un nombre de clase único por instancia: RegisterClassExW
-// falla si la clase ya existe en el proceso.
 var lockClassSeq atomic.Uint64
 
-// Active informa si la pantalla está bloqueada.
 func (l *LockScreen) Active() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.active
 }
 
-// TimedOut informa si el último bloqueo terminó por vencimiento de plazo.
-// Con un candado permanente siempre devuelve false.
 func (l *LockScreen) TimedOut() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.timeout
 }
 
-// Start bloquea la pantalla y devuelve cuando el hilo ya tiene la ventana
-// arriba y el input cortado.
-//
-// duration <= 0 significa permanente: no hay temporizador de salida y la
-// pantalla solo se levanta con Stop().
 func (l *LockScreen) Start(duration time.Duration) error {
 	l.mu.Lock()
 	if l.active {
@@ -118,8 +87,6 @@ func (l *LockScreen) Start(duration time.Duration) error {
 	}
 }
 
-// Stop levanta el bloqueo. Es idempotente: si no hay nada bloqueado, no hace
-// nada y devuelve false.
 func (l *LockScreen) Stop() bool {
 	l.mu.Lock()
 	if !l.active || l.hwnd == 0 {
@@ -137,14 +104,11 @@ func (l *LockScreen) Stop() bool {
 	case <-done:
 		return true
 	case <-time.After(5 * time.Second):
-		// El hilo no respondió: se fuerza el cierre de la ventana.
 		procPostMessageW.Call(hwnd, wmDestroy, 0, 0)
 		return true
 	}
 }
 
-// run crea la ventana y corre el bucle de mensajes. Todo el ciclo de vida del
-// bloqueo — incluido BlockInput — vive en este hilo.
 func (l *LockScreen) run(ready chan<- error, done chan struct{}) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -164,7 +128,7 @@ func (l *LockScreen) run(ready chan<- error, done chan struct{}) {
 		return
 	}
 
-	brush, _, _ := procCreateSolidBrush.Call(0) // negro puro
+	brush, _, _ := procCreateSolidBrush.Call(0)
 	if brush == 0 {
 		ready <- errors.New("lockscreen: CreateSolidBrush falló")
 		return
@@ -208,7 +172,6 @@ func (l *LockScreen) run(ready chan<- error, done chan struct{}) {
 	l.mu.Unlock()
 	lockWindows.Store(hwnd, l)
 
-	// Opaca del todo: alpha 255.
 	procSetLayeredWindowAttributes.Call(hwnd, 0, 255, lwaAlpha)
 
 	procShowWindow.Call(hwnd, swShow)
@@ -217,7 +180,6 @@ func (l *LockScreen) run(ready chan<- error, done chan struct{}) {
 	procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0,
 		swpNoMove|swpNoSize|swpShowWindow)
 
-	// Capa 1 y 2.
 	procBlockInput.Call(1)
 	hideCursor()
 
@@ -226,8 +188,6 @@ func (l *LockScreen) run(ready chan<- error, done chan struct{}) {
 	msHook, _, _ := procSetWindowsHookExW.Call(whMouseLL,
 		syscall.NewCallback(lockMouseProc), instance, 0)
 
-	// 250 ms: cuatro reafirmaciones por segundo. El temporizador también
-	// caza las herramientas de escape una vez por segundo.
 	procSetTimer.Call(hwnd, lockTimerID, lockTimerMS, 0)
 
 	ready <- nil
@@ -245,8 +205,6 @@ func (l *LockScreen) run(ready chan<- error, done chan struct{}) {
 	}
 }
 
-// teardown suelta en orden inverso: primero los hooks, después el input, y al
-// final la ventana. Todo en el hilo que bloqueó.
 func (l *LockScreen) teardown(hwnd, kbHook, msHook uintptr) {
 	if kbHook != 0 {
 		procUnhookWindowsHookEx.Call(kbHook)
@@ -267,15 +225,12 @@ func (l *LockScreen) teardown(hwnd, kbHook, msHook uintptr) {
 	l.mu.Unlock()
 }
 
-// lockWndProc atiende la ventana negra.
 func lockWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	owner, _ := lockWindows.Load(hwnd)
 	lock, _ := owner.(*LockScreen)
 
 	switch msg {
 	case wmClose:
-		// Solo se cierra si Stop() lo autorizó. Alt+F4 no llega porque el
-		// hook se come la tecla, pero por si acaso.
 		if lock != nil && lock.allowEnd.Load() {
 			procDestroyWindow.Call(hwnd)
 		}
@@ -284,7 +239,6 @@ func lockWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		procPostQuitMessage.Call(0)
 		return 0
 	case wmSysCommand:
-		// SC_CLOSE, SC_MINIMIZE, SC_MOVE, SC_SIZE, SC_MAXIMIZE: todos ignorados.
 		return 0
 	case wmTimer:
 		if wparam != lockTimerID || lock == nil {
@@ -304,8 +258,6 @@ func lockWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	return result
 }
 
-// reassert vuelve a poner la ventana arriba y el input cortado. Corre en el
-// hilo de la ventana: BlockInput es de ese hilo.
 func (l *LockScreen) reassert(hwnd uintptr) {
 	procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0,
 		swpNoMove|swpNoSize|swpShowWindow)
@@ -322,7 +274,6 @@ func (l *LockScreen) reassert(hwnd uintptr) {
 		return
 	}
 
-	// Una vez por segundo: matar las herramientas de escape conocidas.
 	if l.ticks.Add(1)%lockKillEvery == 0 {
 		killEscapeTools()
 	}
@@ -337,8 +288,6 @@ func (l *LockScreen) expired() bool {
 	return time.Now().After(l.expires)
 }
 
-// lockKeyProc y lockMouseProc devuelven 1 para que el evento no llegue a
-// ninguna aplicación.
 func lockKeyProc(code int32, wparam, lparam uintptr) uintptr {
 	if code < 0 {
 		next, _, _ := procCallNextHookEx.Call(0, uintptr(code), wparam, lparam)
@@ -355,9 +304,6 @@ func lockMouseProc(code int32, wparam, lparam uintptr) uintptr {
 	return 1
 }
 
-// virtualScreen cubre todos los monitores con margen. El margen tapa el
-// desfase de DPI: si el proceso está virtualizado, el rectángulo real puede
-// ser más grande que el que devuelve GetSystemMetrics.
 func virtualScreen() (x, y, width, height int) {
 	const margin = 64
 
@@ -386,10 +332,6 @@ func hideCursor() {
 	}
 }
 
-// ensureCursorHidden mantiene el contador del cursor por debajo de cero sin
-// arrastrarlo. ShowCursor no tiene lectura: cada llamada suma o resta. El
-// truco es sumar, mirar, y deshacer — así el contador se queda en 0 o -1 en
-// vez de bajar sin freno durante toda la sesión.
 func ensureCursorHidden() {
 	shown, _, _ := procShowCursor.Call(1)
 	if int32(shown) > 0 {
@@ -407,8 +349,6 @@ func showCursor() {
 		}
 	}
 }
-
-// --- tipos y constantes de Win32 ---
 
 type wndClassEx struct {
 	Size       uint32
@@ -438,7 +378,7 @@ const (
 
 	swShow = 5
 
-	hwndTopmost = ^uintptr(0) // (HWND)-1
+	hwndTopmost = ^uintptr(0)
 
 	swpNoSize     = 0x0001
 	swpNoMove     = 0x0002
@@ -460,10 +400,8 @@ const (
 	smCxVirtualScreen = 78
 	smCyVirtualScreen = 79
 
-	lockTimerID = 1
-	lockTimerMS = 250
-	// lockKillEvery: cada cuántos ticks de 250 ms se barren las herramientas
-	// de escape. 4 = una vez por segundo.
+	lockTimerID   = 1
+	lockTimerMS   = 250
 	lockKillEvery = 4
 )
 

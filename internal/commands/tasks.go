@@ -13,14 +13,6 @@ import (
 	"github.com/local/govoid/internal/config"
 )
 
-// La tarea SYSTEM no se registra con /sc MINUTE porque schtasks no permite
-// añadirle un disparador de arranque a la vez que la repetición. Esa carencia
-// costaba hasta 60 segundos de espera tras un bugcheck: el equipo arrancaba,
-// autologon entraba en 15 s y el agente no aparecía hasta el siguiente minuto.
-// Con XML la tarea dispara al arrancar (15 s de margen para que exista sesión)
-// y sigue repitiéndose cada minuto como red de seguridad.
-
-// systemTaskXML arma la definición de la capa SYSTEM.
 func systemTaskXML(target string) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-16"?>` + "\n")
@@ -35,8 +27,6 @@ func systemTaskXML(target string) string {
 	b.WriteString("    </Principal>\n")
 	b.WriteString("  </Principals>\n")
 	b.WriteString("  <Settings>\n")
-	// Un portátil con batería no puede quedarse sin agente: los dos ajustes por
-	// defecto de schtasks son justo los que lo apagan.
 	b.WriteString("    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n")
 	b.WriteString("    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n")
 	b.WriteString("    <StartWhenAvailable>true</StartWhenAvailable>\n")
@@ -76,7 +66,6 @@ func xmlEscape(s string) string {
 	return b.String()
 }
 
-// utf16LE codifica con BOM: schtasks /xml rechaza UTF-8 sin avisar del motivo.
 func utf16LE(s string) []byte {
 	units := utf16.Encode([]rune(s))
 	buf := make([]byte, 2+len(units)*2)
@@ -87,7 +76,6 @@ func utf16LE(s string) []byte {
 	return buf
 }
 
-// registerSystemTask deja la capa SYSTEM con disparador de arranque.
 func registerSystemTask(target string) error {
 	path := filepath.Join(os.TempDir(), "govoid-boot-task.xml")
 	if err := os.WriteFile(path, utf16LE(systemTaskXML(target)), 0o600); err != nil {

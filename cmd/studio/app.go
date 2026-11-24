@@ -2,13 +2,6 @@
 
 package main
 
-// Ventana de GoVoid Studio. Una sola pantalla: tres credenciales, un botón.
-// Todo lo demás —identificador, nombre, ejecutable, tareas, servicio, carpeta
-// y paquete— se deriva de esos tres datos.
-//
-// Todo el estado vive en App y solo se toca desde el hilo de la ventana. Los
-// trabajos largos corren en goroutine y vuelven por post().
-
 import (
 	"fmt"
 	"os"
@@ -47,7 +40,6 @@ const (
 	idChkShowToken
 )
 
-// Identificadores que devuelve MessageBox.
 const (
 	idOk     = 1
 	idYes    = 6
@@ -55,7 +47,6 @@ const (
 	idCancel = 2
 )
 
-// Medidas en unidades de 96 ppp.
 const (
 	headerH = 104
 	margin  = 28
@@ -67,16 +58,15 @@ const (
 	panelBottom = summaryY - 12
 )
 
-// Colores de la marca, en el orden que espera COLORREF.
 var (
-	colorInk    = rgb(17, 24, 39)    // #111827
-	colorPanel  = rgb(241, 245, 249) // #F1F5F9
-	colorEdge   = rgb(226, 232, 240) // #E2E8F0
-	colorAccent = rgb(16, 185, 129)  // #10B981
-	colorMuted  = rgb(107, 114, 128) // #6B7280
-	colorBody   = rgb(31, 41, 55)    // #1F2937
-	colorLog    = rgb(11, 18, 32)    // #0B1220
-	colorLogInk = rgb(209, 213, 219) // #D1D5DB
+	colorInk    = rgb(17, 24, 39)
+	colorPanel  = rgb(241, 245, 249)
+	colorEdge   = rgb(226, 232, 240)
+	colorAccent = rgb(16, 185, 129)
+	colorMuted  = rgb(107, 114, 128)
+	colorBody   = rgb(31, 41, 55)
+	colorLog    = rgb(11, 18, 32)
+	colorLogInk = rgb(209, 213, 219)
 )
 
 type ctrl struct {
@@ -85,7 +75,6 @@ type ctrl struct {
 	w, h int32
 }
 
-// App es la ventana y su estado. Un único ejemplar por proceso.
 type App struct {
 	hwnd     uintptr
 	status   uintptr
@@ -151,8 +140,6 @@ func (a *App) scale(value int32) int32 {
 	return value * int32(a.dpi) / 96
 }
 
-// post encola trabajo para el hilo de la interfaz. Seguro desde cualquier
-// goroutine: no toca ventanas, solo la cola y un PostMessage.
 func (a *App) post(fn func()) {
 	a.queue.Lock()
 	a.queue.items = append(a.queue.items, fn)
@@ -175,8 +162,6 @@ func (a *App) drain() {
 		}
 	}
 }
-
-// --- arranque ---
 
 func runApp() error {
 	dpiAware()
@@ -202,7 +187,7 @@ func runApp() error {
 
 	class := wndClassEx{
 		cbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
-		style:         0x0003, // CS_HREDRAW | CS_VREDRAW
+		style:         0x0003,
 		lpfnWndProc:   wndProcAddr,
 		hInstance:     a.instance,
 		hIcon:         icon,
@@ -285,14 +270,9 @@ func systemMetric(index int32) int {
 	return int(int32(value))
 }
 
-// --- procedimiento de ventana ---
-
 func (a *App) wndProc(hwnd, message, wparam, lparam uintptr) (result uintptr) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			// Un panic aquí mataría el bucle de mensajes: la ventana seguiría
-			// en pantalla pero muerta. Se registra y la app sigue, para que el
-			// fallo quede a la vista en lugar de desaparecer.
 			a.logLine("fallo interno en la ventana: %v", recovered)
 			result = 0
 		}
@@ -333,7 +313,7 @@ func (a *App) wndProc(hwnd, message, wparam, lparam uintptr) (result uintptr) {
 
 	case wmCtlColorStatic:
 		hdc := wparam
-		procSetBkMode.Call(hdc, 1) // TRANSPARENT
+		procSetBkMode.Call(hdc, 1)
 		if lparam == a.headerTitle {
 			procSetTextColor.Call(hdc, rgb(255, 255, 255))
 			return a.headerBrush
@@ -351,7 +331,6 @@ func (a *App) wndProc(hwnd, message, wparam, lparam uintptr) (result uintptr) {
 			procSetBkColor.Call(hdc, colorLog)
 			return a.logBrush
 		}
-		// Solo los controles que viven dentro del panel claro lo usan de fondo.
 		if a.onPanel[lparam] {
 			procSetBkColor.Call(hdc, colorPanel)
 			switch {
@@ -409,7 +388,6 @@ func rgb(r, g, b uint32) uintptr {
 	return uintptr(r | g<<8 | b<<16)
 }
 
-// clampSize mantiene la ventana por encima del mínimo sin tocar LPARAM.
 func (a *App) clampSize() {
 	if a.clamping {
 		return
@@ -433,8 +411,6 @@ func (a *App) clampSize() {
 	a.clamping = false
 }
 
-// --- pintura ---
-
 func (a *App) onPaint() {
 	var paint paintStruct
 	hdc, _, _ := procBeginPaint.Call(a.hwnd, uintptr(unsafe.Pointer(&paint)))
@@ -456,8 +432,6 @@ func (a *App) onPaint() {
 		procDeleteObject.Call(accentBrush)
 	}
 
-	// Panel de credenciales: el bloque que se rellena. Los tres campos viven
-	// encima, así que solo se pinta el fondo y el filo.
 	panel := rect{
 		a.scale(margin - 12), a.scale(panelTop),
 		client.right - a.scale(margin-12), a.scale(panelBottom),
@@ -465,8 +439,6 @@ func (a *App) onPaint() {
 	procFillRect.Call(hdc, uintptr(unsafe.Pointer(&panel)), a.panelBrush)
 	procFrameRect.Call(hdc, uintptr(unsafe.Pointer(&panel)), a.panelEdge)
 }
-
-// --- construcción de la interfaz ---
 
 func (a *App) onCreate() {
 	a.rebuildFonts()
@@ -523,7 +495,7 @@ func (a *App) makeFont(face string, points int32, weight int32) uintptr {
 	height := -points * int32(a.dpi) / 72
 	font, _, _ := procCreateFont.Call(
 		uintptr(height), 0, 0, 0, uintptr(weight),
-		0, 0, 0, 1 /* DEFAULT_CHARSET */, 0, 0, 5 /* CLEARTYPE_QUALITY */, 0,
+		0, 0, 0, 1, 0, 0, 5, 0,
 		uintptr(unsafe.Pointer(u16(face))))
 	return font
 }
@@ -600,7 +572,6 @@ func (a *App) buildFields() {
 	a.onPanel[a.summary] = true
 }
 
-// newControl crea un control hijo y guarda su rectángulo lógico.
 func (a *App) newControl(class, text string, style uint32, x, y, w, h int32, id int) uintptr {
 	hwnd, _, _ := procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(u16(class))),
 		uintptr(unsafe.Pointer(u16(text))), uintptr(style|wsChild|wsVisible),
@@ -610,8 +581,6 @@ func (a *App) newControl(class, text string, style uint32, x, y, w, h int32, id 
 	return hwnd
 }
 
-// addGroup pinta una credencial: número, rótulo, campo y ayuda. El número es
-// el único adorno: dice que solo hay tres cosas que rellenar.
 func (a *App) addGroup(index int, label, key, hint string, secret bool) {
 	y := int32(headerH + margin + index*groupH)
 
@@ -679,7 +648,7 @@ func (a *App) buildActions() {
 func (a *App) addButton(id int, text string, width int32) uintptr {
 	style := uint32(wsChild | wsVisible | wsTabStop | bsPushButton)
 	if id == idBtnBuild {
-		style = wsChild | wsVisible | wsTabStop | 0x0001 // BS_DEFPUSHBUTTON
+		style = wsChild | wsVisible | wsTabStop | 0x0001
 	}
 	hwnd, _, _ := procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(u16("BUTTON"))),
 		uintptr(unsafe.Pointer(u16(text))), uintptr(style),
@@ -693,7 +662,7 @@ func (a *App) addButton(id int, text string, width int32) uintptr {
 func (a *App) buildStatus() {
 	hwnd, _, _ := procCreateWindowEx.Call(0,
 		uintptr(unsafe.Pointer(u16("msctls_statusbar32"))), 0,
-		wsChild|wsVisible|0x0100, /* SBARS_SIZEGRIP */
+		wsChild|wsVisible|0x0100,
 		0, 0, 0, 0, a.hwnd, 0, a.instance, 0)
 	a.status = hwnd
 	procSendMessage.Call(hwnd, 0x0030, a.font, 1)
@@ -701,9 +670,6 @@ func (a *App) buildStatus() {
 	procSendMessage.Call(hwnd, sbSetParts, 1, uintptr(unsafe.Pointer(&parts[0])))
 }
 
-// addLog crea el cuadro de actividad. Va debajo de los botones y ocupa el
-// espacio que sobre. Fondo oscuro: el registro es la única zona que se lee
-// como una consola y así se separa del formulario.
 func (a *App) addLog() {
 	caption := a.newControl("STATIC", "ACTIVIDAD", wsChild|ssLeft, margin, logTop, 300, 14, 0)
 	procSendMessage.Call(caption, 0x0030, a.fontBold, 1)
@@ -716,8 +682,6 @@ func (a *App) addLog() {
 	procSendMessage.Call(a.log, 0x0030, a.fontMono, 1)
 	a.controls = append(a.controls, &ctrl{hwnd: a.log, x: margin, y: logTop + 20, w: 0, h: 0})
 }
-
-// --- disposición ---
 
 const (
 	summaryY = headerH + margin + 3*groupH + 4
@@ -760,7 +724,6 @@ func (a *App) layout() {
 			uintptr(w), uintptr(a.scale(control.h)), 1)
 	}
 
-	// "Mostrar token" a la derecha del rótulo del token.
 	if check := a.checks["showToken"]; check != 0 {
 		procMoveWindow.Call(check,
 			uintptr(width-a.scale(margin)-a.scale(120)), uintptr(a.scale(headerH+margin-2)),
@@ -772,7 +735,6 @@ func (a *App) layout() {
 			uintptr(contentW), uintptr(a.scale(20)), 1)
 	}
 
-	// Barra de progreso fina sobre los botones.
 	procMoveWindow.Call(a.progress, uintptr(a.scale(margin)), uintptr(a.scale(actionsY+14)),
 		uintptr(a.scale(240)), uintptr(a.scale(8)), 1)
 
@@ -812,8 +774,6 @@ func buttonWidth(id int) int32 {
 	}
 }
 
-// --- utilidades ---
-
 func (a *App) setText(hwnd uintptr, value string) {
 	if hwnd == 0 {
 		return
@@ -847,7 +807,7 @@ func (a *App) checked(key string) bool {
 	if hwnd == 0 {
 		return false
 	}
-	state, _, _ := procSendMessage.Call(hwnd, 0x00F0, 0, 0) // BM_GETCHECK
+	state, _, _ := procSendMessage.Call(hwnd, 0x00F0, 0, 0)
 	return state == 1
 }
 
@@ -860,7 +820,7 @@ func (a *App) setChecked(key string, value bool) {
 	if value {
 		flag = 1
 	}
-	procSendMessage.Call(hwnd, 0x00F1, flag, 0) // BM_SETCHECK
+	procSendMessage.Call(hwnd, 0x00F1, flag, 0)
 }
 
 func (a *App) setStatus(text string) {
@@ -877,14 +837,14 @@ func (a *App) logLine(format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	line = fmt.Sprintf("[%s] %s\r\n", time.Now().Format("15:04:05"), line)
 
-	length, _, _ := procSendMessage.Call(a.log, 0x000E, 0, 0) // WM_GETTEXTLENGTH
+	length, _, _ := procSendMessage.Call(a.log, 0x000E, 0, 0)
 	if length > 200000 {
 		a.setText(a.log, "")
 		length = 0
 	}
-	procSendMessage.Call(a.log, 0x00B1, length, length) // EM_SETSEL
+	procSendMessage.Call(a.log, 0x00B1, length, length)
 	procSendMessage.Call(a.log, 0x00C2, 0, uintptr(unsafe.Pointer(u16(line))))
-	procSendMessage.Call(a.log, 0x00B7, 0, 0) // EM_SCROLLCARET
+	procSendMessage.Call(a.log, 0x00B7, 0, 0)
 }
 
 func (a *App) progressSet(done, total int) {
@@ -949,9 +909,6 @@ func (a *App) onClose() {
 	procDestroyWindow.Call(a.hwnd)
 }
 
-// askYes devuelve true solo si el usuario pulsó Sí. MessageBox contesta
-// IDYES (6) en un cuadro Sí/No, no IDOK (1): comparar con 1 hacía que toda
-// confirmación se leyera como un no.
 func (a *App) askYes(text string) bool {
 	result, _, _ := procMessageBox.Call(a.hwnd,
 		uintptr(unsafe.Pointer(u16(text))), uintptr(unsafe.Pointer(u16(appTitle))),

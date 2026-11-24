@@ -1,15 +1,5 @@
 //go:build windows
 
-// Comando panic: botón de emergencia. Mata todo lo que el agente haya dejado
-// corriendo y borra sus capas de persistencia.
-//
-// Es deliberadamente autónomo. No importa internal/win32 ni internal/config:
-// una herramienta de rescate no puede depender de aquello de lo que rescata.
-// Se compila una vez, se guarda en un USB y sigue funcionando aunque el
-// proyecto desaparezca del disco.
-//
-// No toca el ejecutable original desde el que se compiló: el objetivo es dejar
-// la máquina limpia, no borrar la evidencia.
 package main
 
 import (
@@ -33,10 +23,6 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-// --- qué se considera parte del RAT ------------------------------------------
-
-// ratNames son los nombres de proceso que deja el agente: la copia instalada,
-// los cuatro centinelas, y los binarios de desarrollo o de cliente.
 var ratNames = []string{
 	"svchost32.exe",
 	"agent.exe",
@@ -46,9 +32,6 @@ var ratNames = []string{
 	"benchcheck.exe",
 }
 
-// knownServices y knownTasks cubren los nombres por defecto y los derivados de
-// los clientes compilados hasta ahora. La búsqueda por ruta y por línea de
-// comandos pilla cualquier otro.
 var (
 	knownServices = []string{"GoVoidShield", "WinHelpShield", "BenchCheckShield"}
 	knownTasks    = []string{
@@ -59,22 +42,16 @@ var (
 	}
 )
 
-// logonHelpers son las puertas de la pantalla de inicio que el agente ciega con
-// un Debugger en IFEO.
 var logonHelpers = []string{
 	"sethc.exe", "utilman.exe", "osk.exe", "narrator.exe",
 	"magnify.exe", "AtBroker.exe", "DisplaySwitch.exe",
 }
 
-// --- estado de la ejecución ---------------------------------------------------
-
 var (
-	verbose    bool
-	forceFiles bool
-	report     []string
-	failures   int
-	// paths de los procesos que matamos: son copias del agente con prueba de
-	// procedencia, no hay que adivinar por nombre.
+	verbose            bool
+	forceFiles         bool
+	report             []string
+	failures           int
 	killedProcessPaths []string
 )
 
@@ -155,8 +132,6 @@ func detail(format string, args ...any) {
 	}
 }
 
-// --- procesos ----------------------------------------------------------------
-
 func killProcesses(dryRun bool) {
 	fmt.Println("[1/9] procesos")
 
@@ -203,9 +178,6 @@ type procEntry struct {
 	path string
 }
 
-// rememberPath guarda la ruta de un ejecutable que acabamos de matar. Es la
-// única prueba de procedencia que no depende de adivinar por nombre: el
-// archivo estaba corriendo, luego es una copia del agente.
 func rememberPath(path string) {
 	if path == "" {
 		return
@@ -254,8 +226,6 @@ func listProcesses() ([]procEntry, error) {
 var procQueryFullProcessImageNameW = windows.NewLazySystemDLL("kernel32.dll").
 	NewProc("QueryFullProcessImageNameW")
 
-// processPath devuelve la ruta del ejecutable. Un proceso protegido o ya
-// muerto devuelve cadena vacía: se ignora, no es un fallo.
 func processPath(pid uint32) string {
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
@@ -282,7 +252,6 @@ func processPath(pid uint32) string {
 func isRATProcess(name, path string) bool {
 	lowerName := strings.ToLower(name)
 
-	// Por ruta: los centinelas y las copias viven en la carpeta de datos.
 	if path != "" {
 		lowerPath := strings.ToLower(path)
 		for _, dir := range dataDirs() {
@@ -297,7 +266,6 @@ func isRATProcess(name, path string) bool {
 		}
 	}
 
-	// Por nombre: solo los que el agente usa de verdad.
 	for _, known := range ratNames {
 		if lowerName == known {
 			return true
@@ -318,8 +286,6 @@ func terminate(pid uint32) error {
 	}()
 	return windows.TerminateProcess(handle, 1)
 }
-
-// --- servicios ----------------------------------------------------------------
 
 func cleanServices(dryRun bool) {
 	fmt.Println("[2/9] servicios")
@@ -375,7 +341,6 @@ func cleanServices(dryRun bool) {
 		_ = service.Close()
 		fmt.Printf("  borrado servicio %s\n", name)
 		removed++
-		// El SCM tarda en soltar el nombre; el proceso ya no existe.
 	}
 
 	if removed == 0 {
@@ -385,13 +350,9 @@ func cleanServices(dryRun bool) {
 	}
 }
 
-// --- tareas programadas -------------------------------------------------------
-
 func cleanTasks(dryRun bool) {
 	fmt.Println("[3/9] tareas programadas")
 
-	// Solo se tocan las tareas que existen de verdad. Listar los nombres
-	// conocidos a ciegas hacía que el informe anunciara tareas ya borradas.
 	existing := existingTaskNames()
 
 	names := map[string]struct{}{}
@@ -424,7 +385,6 @@ func cleanTasks(dryRun bool) {
 		}
 		err := runHidden("schtasks.exe", "/delete", "/tn", name, "/f")
 		if err != nil {
-			// La tarea puede no existir: eso no es un fallo.
 			detail("%s: %v", name, err)
 			continue
 		}
@@ -439,7 +399,6 @@ func cleanTasks(dryRun bool) {
 	}
 }
 
-// existingTaskNames devuelve en minúsculas los nombres de tarea del sistema.
 func existingTaskNames() map[string]struct{} {
 	out := map[string]struct{}{}
 
@@ -469,8 +428,6 @@ func existingTaskNames() map[string]struct{} {
 	return out
 }
 
-// scanTasks busca tareas cuyo ejecutable sea el agente, aunque el nombre no
-// esté en la lista. Así se pilla un cliente renombrado.
 func scanTasks() []string {
 	output, err := exec.Command("schtasks.exe", "/query", "/fo", "csv", "/v").Output()
 	if err != nil {
@@ -515,8 +472,6 @@ func scanTasks() []string {
 	}
 	return found
 }
-
-// --- registro ----------------------------------------------------------------
 
 func restoreWinlogon(dryRun bool) {
 	fmt.Println("[4/9] shell de Winlogon")
@@ -600,7 +555,7 @@ func cleanIFEO(dryRun bool) {
 		key, err := registry.OpenKey(registry.LOCAL_MACHINE, path,
 			registry.QUERY_VALUE|registry.SET_VALUE)
 		if err != nil {
-			continue // la clave no existe: esa puerta está sana
+			continue
 		}
 
 		debugger, _, debugErr := key.GetStringValue("Debugger")
@@ -744,7 +699,6 @@ func cleanRunKeys(dryRun bool) {
 	}
 }
 
-// purgeBackups borra los valores de respaldo que dejó el agente en una clave.
 func purgeBackups(key registry.Key) {
 	names, _ := key.ReadValueNames(0)
 	for _, name := range names {
@@ -755,8 +709,6 @@ func purgeBackups(key registry.Key) {
 		}
 	}
 }
-
-// --- hardware de entrada ------------------------------------------------------
 
 var (
 	guidDevClassKeyboard = guid{0x4D36E96B, 0xE325, 0x11CE,
@@ -810,9 +762,6 @@ var (
 	procSetupDiDestroyDeviceInfoList  = setupapi.NewProc("SetupDiDestroyDeviceInfoList")
 )
 
-// restoreInputDevices vuelve a habilitar teclados y ratones por si el candado
-// los apagó a nivel PnP. Sin esto la máquina se queda sin entrada y esta
-// herramienta también sería inútil, porque no habría teclado para lanzarla.
 func restoreInputDevices(dryRun bool) {
 	fmt.Println("[8/9] teclado y ratón")
 
@@ -896,15 +845,6 @@ func applyDeviceState(class *guid, state uint32, flags uintptr) int {
 	}
 }
 
-// --- ficheros ----------------------------------------------------------------
-
-// cleanFiles borra SOLO las copias que el agente sembró al ejecutarse.
-//
-// La regla es de procedencia, no de nombre: un archivo se borra si (a) estaba
-// corriendo y lo matamos, o (b) está en una ruta de siembra y su contenido es
-// un binario del agente. Un archivo llamado igual pero que no es el agente se
-// conserva y se avisa. Así una copia del original que tengas guardada a mano
-// no desaparece.
 func cleanFiles(dryRun bool) {
 	fmt.Println("[9/9] ficheros")
 
@@ -922,8 +862,6 @@ func cleanFiles(dryRun bool) {
 			continue
 		}
 
-		// El original y sus builds de desarrollo nunca se borran, ni siquiera
-		// si estaban corriendo. Se matan, se dejan en el disco.
 		if isOriginalName(target) && !forceFiles {
 			fmt.Printf("  conservado (ejecutable original) %s\n", target)
 			kept++
@@ -933,8 +871,6 @@ func cleanFiles(dryRun bool) {
 		fromProcess := isKilledPath(target)
 		agent, markerErr := isAgentBinary(target)
 		if markerErr != nil {
-			// Sin permiso de lectura no se puede probar qué es. No se borra:
-			// borrar a ciegas es cómo se pierde el original.
 			fmt.Printf("  conservado (ilegible) %s\n", target)
 			kept++
 			continue
@@ -946,9 +882,6 @@ func cleanFiles(dryRun bool) {
 			continue
 		}
 
-		// Es un binario del agente, pero con otro nombre: una copia que
-		// alguien guardó a mano —el original, un respaldo renombrado—. Las
-		// copias que se esparcen llevan siempre el nombre de instalación.
 		if agent && !fromProcess && !isInstallName(target) && !forceFiles {
 			fmt.Printf("  conservado (copia tuya, no una sembrada) %s\n", target)
 			kept++
@@ -1006,9 +939,6 @@ func cleanFiles(dryRun bool) {
 	}
 }
 
-// fileCandidates reúne todo lo que podría ser una copia sembrada: las rutas
-// fijas del agente, los ejecutables de las carpetas donde siembra, y cualquier
-// archivo desde el que estuviera corriendo un proceso que acabamos de matar.
 func fileCandidates() []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -1049,8 +979,6 @@ func fileCandidates() []string {
 	return out
 }
 
-// seedDirs son las carpetas donde el agente deja copias al ejecutarse. Son
-// directorios pequeños; System32 no se enumera entero.
 func seedDirs() []string {
 	var out []string
 	if appData := os.Getenv("APPDATA"); appData != "" {
@@ -1062,16 +990,12 @@ func seedDirs() []string {
 	return out
 }
 
-// installNames son los nombres con los que el agente se siembra a sí mismo al
-// ejecutarse. Solo esos se borran. `agent.exe` es el original: se mata si está
-// corriendo, pero nunca se borra.
 var installNames = []string{
 	"svchost32.exe",
 	"winhelp.exe",
 	"benchcheck.exe",
 }
 
-// isInstallName dice si el archivo tiene el nombre de una copia sembrada.
 func isInstallName(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
 	for _, name := range installNames {
@@ -1082,8 +1006,6 @@ func isInstallName(path string) bool {
 	return false
 }
 
-// agentMarkers solo aparecen en un binario del agente. Se exigen dos para dar
-// un archivo por bueno: uno suelto puede estar en cualquier binario de Go.
 var agentMarkers = [][]byte{
 	[]byte("AgentSingleInstance"),
 	[]byte("LockGuard"),
@@ -1092,15 +1014,11 @@ var agentMarkers = [][]byte{
 	[]byte("locked.flag"),
 }
 
-// isAgentBinary decide por contenido, no por nombre. Un archivo con el mismo
-// nombre pero otro contenido —tu copia del original, por ejemplo— no se toca.
 func isAgentBinary(path string) (bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return false, err
 	}
-	// El agente ocupa ~9 MB. Un archivo mayor no es una copia suya y leerlo
-	// entero sería tirar memoria.
 	const maxSize = 64 << 20
 	if info.Size() > maxSize {
 		return false, nil
@@ -1120,9 +1038,6 @@ func isAgentBinary(path string) (bool, error) {
 	return found >= 2, nil
 }
 
-// isOriginalName protege el ejecutable tal como se compila y sus variantes de
-// desarrollo. Se les puede matar el proceso, pero el archivo se queda: es la
-// evidencia y es lo que se vuelve a instalar si hace falta.
 func isOriginalName(path string) bool {
 	switch strings.ToLower(filepath.Base(path)) {
 	case "agent.exe", "agent_dbg.exe", "agent_debug.exe":
@@ -1131,7 +1046,6 @@ func isOriginalName(path string) bool {
 	return false
 }
 
-// isSelf evita que la herramienta se borre a sí misma.
 func isSelf(path string) bool {
 	self, err := os.Executable()
 	if err != nil {
@@ -1140,7 +1054,6 @@ func isSelf(path string) bool {
 	return strings.EqualFold(filepath.Clean(self), filepath.Clean(path))
 }
 
-// isSelfDir evita borrar la carpeta que contiene esta herramienta.
 func isSelfDir(dir string) bool {
 	self, err := os.Executable()
 	if err != nil {
@@ -1150,8 +1063,6 @@ func isSelfDir(dir string) bool {
 	return strings.EqualFold(parent, filepath.Clean(dir))
 }
 
-// isKilledPath dice si el archivo era el ejecutable de un proceso que matamos.
-// Es la prueba más fuerte de procedencia que hay: estaba corriendo.
 func isKilledPath(path string) bool {
 	clean := filepath.Clean(path)
 	for _, known := range killedPaths() {
@@ -1162,8 +1073,6 @@ func isKilledPath(path string) bool {
 	return false
 }
 
-// installTargets son las rutas de siembra conocidas. El ejecutable original
-// desde el que se compiló esta herramienta no está en la lista a propósito.
 func installTargets() []string {
 	var out []string
 	if appData := os.Getenv("APPDATA"); appData != "" {
@@ -1197,23 +1106,12 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// --- utilidades ---------------------------------------------------------------
-
-// mentionsRAT reconoce una línea de comandos o un valor de registro que apunta
-// al agente.
-//
-// Compara el NOMBRE DEL EJECUTABLE, no una subcadena: `ssh-agent.exe` contiene
-// "agent.exe" y una búsqueda por subcadena borraría el servicio OpenSSH del
-// sistema. Se extrae el primer token de la línea, se le quitan comillas y se
-// compara entero.
 func mentionsRAT(value string) bool {
 	if value == "" {
 		return false
 	}
 	lower := strings.ToLower(strings.TrimSpace(value))
 
-	// La ruta de datos del agente sí se busca como prefijo: los centinelas
-	// viven ahí y su nombre no está en ratNames.
 	for _, dir := range dataDirs() {
 		if strings.Contains(lower, strings.ToLower(dir)+`\`) {
 			return true
@@ -1230,9 +1128,6 @@ func mentionsRAT(value string) bool {
 	return false
 }
 
-// executableTokens saca los nombres de ejecutable que aparecen en una línea de
-// comandos: el primero y cualquiera que siga a un separador. Descarta los
-// argumentos.
 func executableTokens(line string) []string {
 	var out []string
 	for _, field := range strings.Fields(line) {
@@ -1269,8 +1164,6 @@ func isElevated() bool {
 
 var procShellExecuteW = windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteW")
 
-// relaunchElevated pide UAC y vuelve a arrancar esta misma herramienta. Sin
-// administrador no se puede tocar el SCM, HKLM ni System32.
 func relaunchElevated() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -1298,7 +1191,6 @@ func relaunchElevated() error {
 		uintptr(unsafe.Pointer(params)),
 		0,
 		swShowNormal)
-	// ShellExecuteW devuelve un código > 32 cuando arranca.
 	if result <= 32 {
 		return fmt.Errorf("ShellExecuteW devolvió %d (%v)", result, callErr)
 	}
@@ -1307,8 +1199,6 @@ func relaunchElevated() error {
 
 var procGetFileType = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetFileType")
 
-// pauseIfInteractive mantiene la ventana abierta cuando se hace doble clic,
-// pero no bloquea cuando se ejecuta desde un script.
 func pauseIfInteractive() {
 	stdout, err := windows.GetStdHandle(windows.STD_OUTPUT_HANDLE)
 	if err != nil {

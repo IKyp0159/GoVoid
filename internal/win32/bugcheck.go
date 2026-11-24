@@ -13,14 +13,8 @@ import (
 	"github.com/local/govoid/internal/config"
 )
 
-// pendingBugcheckName es el aviso que sobrevive al bugcheck. El agente lo deja
-// justo antes de matar el proceso crítico y lo consume el arranque siguiente:
-// es la única forma de cerrar el círculo, porque el proceso que provoca el
-// bugcheck no puede informar de su propio resultado.
 const pendingBugcheckName = "bsod_pending"
 
-// pendingBugcheckPath vive en ProgramData, machine-wide, igual que la bandera
-// de bloqueo y la caché de claves.
 func pendingBugcheckPath() string {
 	if programData := os.Getenv("ProgramData"); programData != "" {
 		return filepath.Join(programData, config.DataDirName, pendingBugcheckName)
@@ -32,13 +26,6 @@ func pendingBugcheckPath() string {
 	return filepath.Join(appData, config.DataDirName, pendingBugcheckName)
 }
 
-// MarkPendingBugcheck deja constancia en disco de que el bugcheck está en
-// marcha. Si la máquina cae, el archivo queda y el próximo arranque lo lee.
-//
-// El Sync no es adorno: el bugcheck llega milisegundos después de esta llamada
-// y NTFS escribe perezoso. Sin volcar a disco el aviso se queda en la caché y
-// se pierde con la caída, que es exactamente el caso que el aviso existe para
-// cubrir.
 func MarkPendingBugcheck(method string) error {
 	path := pendingBugcheckPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -61,7 +48,6 @@ func MarkPendingBugcheck(method string) error {
 	return file.Close()
 }
 
-// PendingBugcheck devuelve el aviso pendiente, si lo hay.
 func PendingBugcheck() (string, bool) {
 	raw, err := os.ReadFile(pendingBugcheckPath())
 	if err != nil {
@@ -74,7 +60,6 @@ func PendingBugcheck() (string, bool) {
 	return text, true
 }
 
-// ClearPendingBugcheck borra el aviso después de informar del resultado.
 func ClearPendingBugcheck() error {
 	err := os.Remove(pendingBugcheckPath())
 	if errors.Is(err, os.ErrNotExist) {
@@ -83,15 +68,6 @@ func ClearPendingBugcheck() error {
 	return err
 }
 
-// LastBugcheckCode lee el código del último bugcheck.
-//
-// El evento 1001 de WER-SystemErrorReporting es la fuente buena —trae el código
-// en su primera propiedad, así que no hay que analizar texto traducido— pero
-// WER solo lo escribe cuando conserva el volcado. En un equipo con los volcados
-// desactivados el bugcheck ocurre igual y no deja evento 1001: el rastro queda
-// en el evento 41 de Kernel-Power, que lleva el código en su propiedad
-// BugcheckCode. Se prueban los dos y, si no hay ninguno, se mira si quedó algún
-// minidump, que al menos prueba que hubo bugcheck.
 func LastBugcheckCode() (code string, when time.Time, err error) {
 	script := `$out = 'none'
 $e = Get-WinEvent -FilterHashtable @{LogName='System';Id=1001} -MaxEvents 1 -ErrorAction SilentlyContinue

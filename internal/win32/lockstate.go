@@ -18,17 +18,7 @@ import (
 	"github.com/local/govoid/internal/config"
 )
 
-// El candado vive en tres sitios a la vez:
-//
-//   - un fichero bandera que dice "esta máquina está bloqueada" y sobrevive al
-//     reinicio;
-//   - un mutex con nombre por cada centinela, que dice "este centinela sigue
-//     vivo" sin necesidad de enumerar procesos;
-//   - una copia del ejecutable por centinela, para que un taskkill por nombre
-//     no los tumbe a todos de una vez.
 const (
-	// guardSlots es el número de centinelas. Cuatro cubre el caso de que el
-	// operador mate uno o dos a mano antes de que se repongan.
 	guardSlots = 4
 
 	lockFlagName  = "locked.flag"
@@ -36,13 +26,8 @@ const (
 	guardExeFmt   = "g%d.exe"
 )
 
-// lockFlagOverride redirige la bandera a otra ruta. Solo lo usan las pruebas:
-// escribir la bandera real dejaría la máquina de trabajo bloqueada en el
-// siguiente arranque del agente.
 var lockFlagOverride string
 
-// lockFlagPath devuelve la bandera de bloqueo. ProgramData es machine-wide:
-// un segundo usuario en la misma máquina también arranca bloqueado.
 func lockFlagPath() string {
 	if lockFlagOverride != "" {
 		return lockFlagOverride
@@ -57,19 +42,15 @@ func lockFlagPath() string {
 	return filepath.Join(appData, config.DataDirName, lockFlagName)
 }
 
-// guardDir es donde viven las copias de los centinelas.
 func guardDir() string {
 	return filepath.Dir(lockFlagPath())
 }
 
-// LockRequested informa si la máquina debe estar bloqueada.
 func LockRequested() bool {
 	_, err := os.Stat(lockFlagPath())
 	return err == nil
 }
 
-// RequestLock marca la máquina como bloqueada. Escribe primero el fichero:
-// cualquier centinela que arranque después ya lo ve.
 func RequestLock() error {
 	path := lockFlagPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -82,8 +63,6 @@ func RequestLock() error {
 	return nil
 }
 
-// RequestUnlock borra la bandera. Los centinelas se apagan solos en menos de
-// un segundo al no verla.
 func RequestUnlock() error {
 	err := os.Remove(lockFlagPath())
 	if err == nil || errors.Is(err, os.ErrNotExist) {
@@ -100,9 +79,6 @@ func guardExePath(slot int) string {
 	return filepath.Join(guardDir(), fmt.Sprintf(guardExeFmt, slot))
 }
 
-// agentPathFile guarda la ruta del agente principal. Un centinela que ve el
-// mutex del agente libre lo relanza desde aquí: sin agente no hay desbloqueo
-// remoto.
 func agentPathFile() string {
 	return filepath.Join(guardDir(), agentPathName)
 }
@@ -122,8 +98,6 @@ func readAgentPath() string {
 	return strings.TrimSpace(string(payload))
 }
 
-// guardAlive comprueba si el centinela del slot tiene el mutex tomado. Si el
-// objeto no existe, el proceso que lo tomó ya murió.
 func guardAlive(slot int) bool {
 	name, err := windows.UTF16PtrFromString(guardMutexName(slot))
 	if err != nil {
@@ -137,8 +111,6 @@ func guardAlive(slot int) bool {
 	return true
 }
 
-// ensureGuardCopy deja una copia fresca del ejecutable en la ruta del
-// centinela. Compara tamaño y fecha: si el binario cambió, se reemplaza.
 func ensureGuardCopy(exe string, slot int) (string, error) {
 	target := guardExePath(slot)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -160,7 +132,6 @@ func ensureGuardCopy(exe string, slot int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Se escribe a un temporal y se renombra: nunca queda una copia a medias.
 	tmp := target + ".new"
 	if err := os.WriteFile(tmp, payload, 0o755); err != nil {
 		return "", err
@@ -173,8 +144,6 @@ func ensureGuardCopy(exe string, slot int) (string, error) {
 	return target, nil
 }
 
-// SpawnGuards arranca los centinelas que falten. Es idempotente: un centinela
-// que encuentra su mutex tomado sale solo.
 func SpawnGuards(exe string) {
 	for slot := 0; slot < guardSlots; slot++ {
 		if guardAlive(slot) {
@@ -197,14 +166,11 @@ func spawnGuard(path string, slot int) {
 	if err := cmd.Start(); err != nil {
 		return
 	}
-	// El proceso queda desligado: nadie espera por él.
 	_ = cmd.Process.Release()
 }
 
-// createNoWindowFlag evita la consola en cada proceso auxiliar.
 const createNoWindowFlag = 0x08000000
 
-// guardsAlive cuenta los centinelas vivos.
 func guardsAlive() int {
 	alive := 0
 	for slot := 0; slot < guardSlots; slot++ {
@@ -215,14 +181,10 @@ func guardsAlive() int {
 	return alive
 }
 
-// GuardSlots es el número de centinelas que mantiene el candado.
 func GuardSlots() int { return guardSlots }
 
-// GuardCount devuelve cuántos centinelas están vivos ahora mismo.
 func GuardCount() int { return guardsAlive() }
 
-// removeGuardCopies borra las copias. Reintenta porque Windows no deja borrar
-// un ejecutable en marcha.
 func removeGuardCopies() error {
 	var errs []error
 	for slot := 0; slot < guardSlots; slot++ {

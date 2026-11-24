@@ -17,7 +17,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// Upload descarga una URL a %TEMP% y devuelve la ruta local.
 func Upload(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -32,9 +31,6 @@ func Upload(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	Finish(s, i, fmt.Sprintf("📤 Guardado en `%s` (%d bytes).", dest, written))
 }
 
-// fetchToTemp descarga rawURL a un archivo temporal y devuelve la ruta y los
-// bytes escritos. El nombre sale del último segmento de la URL; si no hay, se
-// genera uno con la marca de tiempo.
 func fetchToTemp(rawURL string) (string, int64, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme == "" {
@@ -57,8 +53,6 @@ func fetchToTemp(rawURL string) (string, int64, error) {
 	}
 
 	name := path.Base(parsed.Path)
-	// path.Base puede devolver ".", "..", "/" o un nombre con separadores
-	// codificados; se limpia a un nombre simple antes de tocar el disco.
 	name = strings.TrimSpace(name)
 	if name == "" || name == "." || name == ".." || name == "/" ||
 		strings.ContainsAny(name, `\/:*?"<>|`) {

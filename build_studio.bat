@@ -1,6 +1,4 @@
 @echo off
-rem Compila GoVoid Studio: binario limpio, recursos (icono, manifiesto, version)
-rem y una copia en dist. Sin CGO, sin dependencias nuevas.
 setlocal
 
 set "ROOT=%~dp0"

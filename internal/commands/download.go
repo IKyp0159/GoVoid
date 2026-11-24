@@ -13,18 +13,11 @@ import (
 )
 
 const (
-	// maxDirectUpload es el techo de un adjunto de Discord. Por encima de
-	// esto el archivo se parte, porque la API rechaza el mensaje entero.
 	maxDirectUpload = 25 * 1024 * 1024
 
-	// partSize es el tamaño de cada parte al dividir. Deja margen bajo el
-	// techo para las cabeceras del multipart.
 	partSize = 20 * 1024 * 1024
 )
 
-// Download envía un archivo al operador. Si supera 25 MB o es un directorio,
-// lo comprime en un zip temporal antes de subirlo. Si aun así pasa del techo
-// de Discord, lo parte en bloques de 20 MB y los sube en orden.
 func Download(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -93,9 +86,6 @@ func Download(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-// sendParts divide el archivo y sube cada parte. La primera sale como edición
-// de la interacción (el defer ya está en curso); el resto como mensajes del
-// canal, que es lo único que admite adjuntos sin límite de 10 por respuesta.
 func sendParts(s *discordgo.Session, i *discordgo.InteractionCreate, sendPath string, originalSize int64) {
 	parts, err := splitFile(sendPath, partSize)
 	if err != nil {
@@ -145,9 +135,6 @@ func sendParts(s *discordgo.Session, i *discordgo.InteractionCreate, sendPath st
 	}
 }
 
-// splitFile parte src en bloques de partSize y devuelve las rutas temporales
-// en orden, con nombre `<original>.partNN`, dentro de un directorio temporal
-// propio. El llamador borra las partes y el directorio.
 func splitFile(src string, size int64) ([]string, error) {
 	if size <= 0 {
 		return nil, fmt.Errorf("tamaño de parte inválido: %d", size)
@@ -178,8 +165,6 @@ func splitFile(src string, size int64) ([]string, error) {
 	parts := make([]string, 0, 8)
 	buffer := make([]byte, size)
 
-	// El total va en el nombre de cada bloque: así el reensamblado en la otra
-	// punta sabe cuántos faltan sin depender de un manifiesto aparte.
 	totalParts := (fileSize + size - 1) / size
 
 	for index := 1; ; index++ {

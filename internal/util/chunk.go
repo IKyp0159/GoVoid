@@ -5,15 +5,8 @@ import (
 	"unicode/utf8"
 )
 
-// DiscordMessageLimit deja margen bajo los 2000 caracteres de Discord.
 const DiscordMessageLimit = 1990
 
-// Chunk parte un texto en trozos de como máximo size caracteres,
-// cortando preferentemente por salto de línea para no romper bloques.
-//
-// Los cortes se ajustan a límites de rune: partir un carácter multibyte deja
-// bytes inválidos y Discord los muestra como replacement characters, además de
-// romper cualquier bloque de código que los contenga.
 func Chunk(s string, size int) []string {
 	if size <= 0 || size > DiscordMessageLimit {
 		size = DiscordMessageLimit
@@ -29,9 +22,6 @@ func Chunk(s string, size int) []string {
 		if cut <= 0 {
 			cut = size
 		}
-		// runeBoundary puede devolver 0 cuando la ventana entera es
-		// continuación de un rune (salida de consola no UTF-8). Sin el corte
-		// seco el bucle no avanza y el comando se cuelga para siempre.
 		if cut = runeBoundary(remaining, cut); cut <= 0 {
 			cut = size
 		}
@@ -44,7 +34,6 @@ func Chunk(s string, size int) []string {
 	return out
 }
 
-// SafeCut devuelve s[:n] sin partir un rune. n se acota al tamaño de s.
 func SafeCut(s string, n int) string {
 	if n >= len(s) {
 		return s
@@ -55,7 +44,6 @@ func SafeCut(s string, n int) string {
 	return s[:runeBoundary(s, n)]
 }
 
-// runeBoundary retrocede n hasta el inicio del rune que lo contiene.
 func runeBoundary(s string, n int) int {
 	for n > 0 && n < len(s) && !utf8.RuneStart(s[n]) {
 		n--

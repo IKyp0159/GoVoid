@@ -7,7 +7,6 @@ import (
 	"github.com/local/govoid/internal/win32"
 )
 
-// Clipboard lee o escribe el portapapeles.
 func Clipboard(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -34,7 +33,6 @@ func Clipboard(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-// ClipboardGet atiende el botón del panel: lee el portapapeles.
 func ClipboardGet(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return

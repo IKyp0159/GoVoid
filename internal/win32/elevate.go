@@ -22,22 +22,14 @@ const (
 	elevationMarkerName = "elevated.pid"
 )
 
-// IsAdmin informa si el proceso tiene el token elevado. No basta con ser del
-// grupo Administradores: con UAC el token viaja filtrado y las escrituras en
-// HKLM y System32 fallan igual.
 func IsAdmin() bool {
 	return windows.GetCurrentProcessToken().IsElevated()
 }
 
-// elevationMarkerPath es el aviso que deja el hijo elevado para que el padre
-// sepa que el UAC se aceptó y que puede retirarse.
 func elevationMarkerPath() string {
 	return filepath.Join(guardDir(), elevationMarkerName)
 }
 
-// WriteElevationMarker lo llama el hijo elevado nada más arrancar. Se escribe
-// antes de pedir el mutex a propósito: el padre necesita la señal para soltar
-// el suyo, y el hijo no puede tomarlo mientras el padre viva.
 func WriteElevationMarker() error {
 	path := elevationMarkerPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -46,14 +38,10 @@ func WriteElevationMarker() error {
 	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
 }
 
-// ClearElevationMarker borra el aviso de una elevación anterior.
 func ClearElevationMarker() {
 	_ = os.Remove(elevationMarkerPath())
 }
 
-// WaitElevationMarker espera a que aparezca el pid de un hijo elevado vivo.
-// Devuelve falso si el plazo vence: significa que el UAC se canceló o que el
-// hijo murió antes de arrancar, y el padre debe seguir vivo.
 func WaitElevationMarker(timeout time.Duration) (int, bool) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -69,9 +57,6 @@ func WaitElevationMarker(timeout time.Duration) (int, bool) {
 	return 0, false
 }
 
-// RequestElevation relanza este ejecutable con el verbo runas. Windows muestra
-// el UAC en la sesión interactiva: si el operador remoto no puede pulsar Sí, la
-// elevación no ocurre y el agente actual sigue como estaba.
 func RequestElevation() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -99,8 +84,6 @@ func RequestElevation() error {
 		0,
 		swShowNormal)
 
-	// ShellExecuteW devuelve un código <= 32 cuando falla; 5 es UAC cancelado
-	// o denegado, 31 no hay asociación para el verbo.
 	if result <= shellSuccessMin {
 		if callErr != nil && callErr.Error() != "The operation completed successfully." {
 			return fmt.Errorf("elevación: ShellExecuteW devolvió %d (%v)", result, callErr)
@@ -110,8 +93,6 @@ func RequestElevation() error {
 	return nil
 }
 
-// processAlive comprueba que un pid sigue existiendo sin pedir más derechos que
-// los de sincronización.
 func processAlive(pid uint32) bool {
 	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, pid)
 	if err != nil {
@@ -123,10 +104,10 @@ func processAlive(pid uint32) bool {
 		}
 	}()
 
-	const stillActive = 0x00000103 // STATUS_PENDING no aplica a procesos
+	const stillActive = 0x00000103
 	event, err := windows.WaitForSingleObject(handle, 0)
 	if err != nil {
-		return true // existe pero no se puede esperar: cuenta como vivo
+		return true
 	}
 	return event == uint32(windows.WAIT_TIMEOUT)
 }

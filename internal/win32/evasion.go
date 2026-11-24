@@ -10,10 +10,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// escapeTools son los ejecutables con los que se puede abrir una brecha desde
-// el escritorio bloqueado. El candado los mata en cuanto aparecen: no puede
-// impedir que se lancen desde el escritorio seguro de Ctrl+Alt+Del, pero sí
-// puede impedir que sobrevivan el tiempo suficiente para hacer algo.
 var escapeTools = map[string]struct{}{
 	"taskmgr.exe":        {},
 	"procexp.exe":        {},
@@ -37,14 +33,6 @@ var escapeTools = map[string]struct{}{
 	"wbemtest.exe":       {},
 }
 
-// killEscapeTools recorre la lista de procesos y termina los que están en la
-// lista negra. Se llama una vez por segundo desde el temporizador del candado,
-// en el hilo de la ventana; la enumeración es corta y no toca el input.
-//
-// sc.exe, taskkill.exe, reg.exe y net.exe no están en la lista: son las
-// herramientas con las que el propio candado instala y retira sus capas, y
-// matarlas dejaría el desbloqueo a medias. Detrás de ellos hace falta una
-// consola, y las consolas sí se matan.
 func killEscapeTools() {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {

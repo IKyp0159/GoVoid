@@ -7,11 +7,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// Discord rechaza `"emoji":{}` en botones y opciones de select. discordgo
-// v0.27.1 declara esos campos sin omitempty, así que el valor cero viaja en el
-// JSON y la API responde COMPONENT_INVALID_EMOJI. Los tipos de este archivo
-// emiten exactamente los campos que la API acepta.
-
 type wireButton struct {
 	Label    string
 	Style    discordgo.ButtonStyle
@@ -73,12 +68,10 @@ func (s wireSelect) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// Button construye un botón válido para la API.
 func Button(label string, style discordgo.ButtonStyle, customID string) discordgo.MessageComponent {
 	return wireButton{Label: label, Style: style, CustomID: customID}
 }
 
-// ControlPanel devuelve las tres filas de botones del panel de control.
 func ControlPanel() []discordgo.MessageComponent {
 	return []discordgo.MessageComponent{
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
@@ -109,7 +102,6 @@ func ControlPanel() []discordgo.MessageComponent {
 	}
 }
 
-// ProcessSelect construye la fila con el menú de procesos de una página.
 func ProcessSelect(page int, options []discordgo.SelectMenuOption) []discordgo.MessageComponent {
 	if len(options) > 25 {
 		options = options[:25]
@@ -134,7 +126,6 @@ func ProcessSelect(page int, options []discordgo.SelectMenuOption) []discordgo.M
 	}
 }
 
-// ProcessNav construye la fila de navegación entre páginas de procesos.
 func ProcessNav(page, totalPages int) []discordgo.MessageComponent {
 	if totalPages <= 1 {
 		return nil

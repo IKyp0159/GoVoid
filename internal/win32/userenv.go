@@ -14,23 +14,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Bloque de entorno para un proceso que nace con el token de otro usuario.
-//
-// CreateProcessAsUser no hereda el entorno del usuario cuando lpEnvironment es
-// nil: el hijo recibe el bloque del llamante, que en la tarea de arranque es
-// SYSTEM. Con eso APPDATA apunta al perfil del sistema, InstallPath() resuelve
-// mal y el agente se instala en el sitio equivocado.
-//
-// CreateEnvironmentBlock sería lo natural, pero el bloque que devuelve en esta
-// máquina lo rechaza CreateProcessAsUser con ERROR_INVALID_PARAMETER —se
-// comprobó probando cada variante por separado—. Así que el bloque se arma a
-// mano: se parte del entorno actual, que ya trae SystemRoot, PATH y COMSPEC
-// correctos, y se sustituyen todas las claves que dependen del usuario.
-
 var procGetUserProfileDirectory = userenv.NewProc("GetUserProfileDirectoryW")
 
-// buildUserEnvironment devuelve el bloque listo para CreateProcessAsUser: una
-// secuencia de cadenas "CLAVE=valor" separadas por NUL y cerrada por un NUL más.
 func buildUserEnvironment(token windows.Token) ([]uint16, error) {
 	profile, err := userProfileDir(token)
 	if err != nil {
@@ -58,8 +43,6 @@ func buildUserEnvironment(token windows.Token) ([]uint16, error) {
 		if !found {
 			continue
 		}
-		// Windows ignora las entradas que empiezan por "=" (rutas de unidad
-		// por usuario) y no aportan nada aquí.
 		if name == "" {
 			continue
 		}
@@ -82,12 +65,10 @@ func buildUserEnvironment(token windows.Token) ([]uint16, error) {
 		}
 		block = append(block, encoded...)
 	}
-	// Doble NUL de cierre.
 	block = append(block, 0)
 	return block, nil
 }
 
-// userProfileDir pide a userenv el perfil del dueño del token.
 func userProfileDir(token windows.Token) (string, error) {
 	if err := procGetUserProfileDirectory.Find(); err != nil {
 		return "", fmt.Errorf("win32: GetUserProfileDirectory: %w", err)
@@ -108,14 +89,12 @@ func userProfileDir(token windows.Token) (string, error) {
 	if result == 0 {
 		return "", fmt.Errorf("win32: GetUserProfileDirectory: %w", callErr)
 	}
-	// La llamada devuelve el tamaño en caracteres, sin contar el NUL final.
 	if size > 0 && int(size) <= len(buffer) {
 		buffer = buffer[:size]
 	}
 	return windows.UTF16ToString(buffer), nil
 }
 
-// tokenAccount resuelve el nombre de cuenta y el dominio del token.
 func tokenAccount(token windows.Token) (account, domain string, err error) {
 	user, tokenErr := token.GetTokenUser()
 	if tokenErr != nil {
@@ -129,9 +108,6 @@ func tokenAccount(token windows.Token) (account, domain string, err error) {
 	return account, domain, nil
 }
 
-// freeEnvironmentBlock existe para que el llamador pueda soltar el bloque con
-// la misma forma con la que lo crea. El bloque vive en el heap de Go y lo libera
-// el recolector; esto solo mantiene viva la referencia hasta después de usarlo.
 func freeEnvironmentBlock(block []uint16) {
 	runtime.KeepAlive(block)
 }

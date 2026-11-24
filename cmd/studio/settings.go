@@ -2,13 +2,6 @@
 
 package main
 
-// Configuración de la app: JSON en %APPDATA%\GoVoidStudio. Solo se guardan las
-// tres credenciales y el estado de "mostrar token". El token va cifrado con
-// DPAPI en el contexto del usuario que guardó.
-//
-// Todo lo demás —identificador, nombre, ejecutable, tareas, servicio y rutas—
-// no se guarda porque se deriva en cada compilación.
-
 import (
 	"encoding/base64"
 	"encoding/json"
@@ -22,10 +15,9 @@ import (
 
 const cryptProtectUIForbidden = 0x1
 
-// Settings es el archivo de configuración.
 type Settings struct {
 	Version   int    `json:"version"`
-	Token     string `json:"token,omitempty"` // base64(DPAPI)
+	Token     string `json:"token,omitempty"`
 	Guild     string `json:"guild"`
 	Webhook   string `json:"webhook"`
 	ShowToken bool   `json:"show_token"`
@@ -45,16 +37,12 @@ func defaultSettingsPath() string {
 	return filepath.Join(settingsDir(), "studio.json")
 }
 
-// trimBOM quita la marca de orden de bytes que dejan algunos editores y
-// PowerShell. Sin esto, encoding/json falla con un carácter invisible.
 func trimBOM(payload []byte) []byte {
 	if len(payload) >= 3 && payload[0] == 0xEF && payload[1] == 0xBB && payload[2] == 0xBF {
 		return payload[3:]
 	}
 	return payload
 }
-
-// --- DPAPI ---
 
 func protect(data []byte) ([]byte, error) {
 	if len(data) == 0 {
@@ -109,8 +97,6 @@ func decodeSecret(encoded string) string {
 	}
 	return string(plain)
 }
-
-// --- carga y guardado ---
 
 func (a *App) loadSettings() {
 	settings := Settings{Version: 1}
@@ -198,7 +184,7 @@ func (a *App) applyTokenMask(show bool) {
 	if token == 0 {
 		return
 	}
-	mask := uintptr(0x25CF) // EM_SETPASSWORDCHAR
+	mask := uintptr(0x25CF)
 	if show {
 		mask = 0
 	}

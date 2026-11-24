@@ -2,9 +2,6 @@
 
 package main
 
-// Diálogos del sistema y portapapeles. Nada de controles propios donde Windows
-// ya tiene el diálogo correcto: el operador reconoce estas ventanas.
-
 import (
 	"os"
 	"unsafe"
@@ -17,8 +14,6 @@ const (
 	gmemMoveable  = 0x0042
 )
 
-// widez convierte a UTF-16 conservando los NUL internos, que es como Windows
-// separa los pares de un filtro de archivos.
 func widez(value string) []uint16 {
 	runes := []rune(value)
 	out := make([]uint16, 0, len(runes)+1)
@@ -80,7 +75,7 @@ func (a *App) fileDialog(title, filter, defaultName string, save bool) string {
 
 func (a *App) askFolder(title, initial string) string {
 	if err := procCoInitializeEx.Find(); err == nil {
-		procCoInitializeEx.Call(0, 2) // COINIT_APARTMENTTHREADED
+		procCoInitializeEx.Call(0, 2)
 	}
 
 	titleWide := widez(title)
@@ -149,9 +144,6 @@ func copyText(text string) {
 		procGlobalFree.Call(handle)
 		return
 	}
-	// RtlMoveMemory copia a una dirección que llega como uintptr. Así no hay
-	// conversión uintptr→puntero en Go: la memoria es del montón global de
-	// Win32, no del recolector.
 	procRtlMoveMemory.Call(pointer, uintptr(unsafe.Pointer(&utf[0])), size)
 	procGlobalUnlock.Call(handle)
 

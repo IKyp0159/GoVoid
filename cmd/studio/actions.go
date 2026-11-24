@@ -2,9 +2,6 @@
 
 package main
 
-// Acciones de la ventana: probar la conexión, compilar y las utilidades del
-// menú. La identidad del cliente no se pide: se deriva de la guild y del bot.
-
 import (
 	"context"
 	"fmt"
@@ -56,11 +53,6 @@ func (a *App) onCommand(id, code int, lparam uintptr) {
 	}
 }
 
-// --- derivados ---
-
-// autoID construye el identificador del cliente a partir de la guild. Tiene que
-// empezar por letra y ser alfanumérico porque acaba en nombres de objeto del
-// kernel (mutex, servicio, tareas).
 func autoID(guild string) string {
 	digits := make([]rune, 0, 8)
 	for _, char := range guild {
@@ -77,8 +69,6 @@ func autoID(guild string) string {
 	return "GV" + string(digits)
 }
 
-// optionsForBuild arma la identidad completa. El nombre sale del bot cuando la
-// validación lo conoce; si no, se usa uno neutro.
 func (a *App) optionsForBuild(botName string) kit.Options {
 	guild := strings.TrimSpace(a.field("guild"))
 	id := autoID(guild)
@@ -127,8 +117,6 @@ func (a *App) updateSummary() {
 	a.setText(a.summary, fmt.Sprintf("Se generará  %s  ·  %s  ·  %s", id, strings.ToLower(id)+".exe", out))
 }
 
-// --- trabajos ---
-
 func (a *App) startCheck() {
 	if a.busy {
 		return
@@ -174,9 +162,6 @@ func (a *App) startBuild() {
 		return
 	}
 
-	// El mismo token del agente que ya corre aquí es un choque real: dos
-	// sesiones de gateway se expulsan. Se avisa y decide el usuario, porque
-	// recompilar su propio cliente es un caso legítimo.
 	if _, err := opt.GuardSharedToken(); err != nil {
 		if !a.askYes(err.Error() + "\n\n¿Compilar de todos modos?") {
 			a.setStatus("Compilación cancelada")
@@ -299,8 +284,6 @@ func (a *App) finishBuild(opt kit.Options, result *kit.Result, err error, elapse
 		a.openOutput()
 	}
 }
-
-// --- utilidades ---
 
 func (a *App) fail(err error) {
 	a.logLine("ERROR: %v", err)

