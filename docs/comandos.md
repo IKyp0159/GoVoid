@@ -30,6 +30,25 @@ Se ejecutan en el canal de sesión del equipo y responden ahí.
 
 El panel publica quince botones con las mismas acciones.
 
+## El dump del keylogger
+
+Sale como `keylog_<host>_<AAAAMMDD_HHMMSS>.txt`, UTF-8, un bloque por ventana con foco:
+
+```
+[2026-11-23 14:32:01 UTC] chrome.exe — "Gmail - Inbox"
+hola como estas[ENTER]
+esto es un mensaje[CTRL+C]
+
+[2026-11-23 14:33:45 UTC] chrome.exe — "general - Discord"
+oye te mando el archivo[ENTER]
+```
+
+- Las teclas sin texto van marcadas inline: `[ENTER]`, `[TAB]`, `[BKSP]`, `[DEL]`, `[ESC]`, `[WIN]`, `[LEFT]`, `[UP]`, `[RIGHT]`, `[DOWN]`, `[HOME]`, `[END]`, `[PGUP]`, `[PGDN]`, `[INS]`, `[PRTSC]`, `[MENU]`, `[PAUSE]`, `[NUMLOCK]`, `[SCROLL]`, `[F1]`…`[F12]`.
+- Con CTRL pulsado: `[CTRL+C]`, `[CTRL+V]`, `[CTRL+X]`, `[CTRL+A]`, `[CTRL+Z]`, `[CTRL+S]` y `[CTRL+Flecha]`, `[CTRL+F5]`.
+- Una tecla mantenida no repite el bloque: el auto-repeat se funde en `[RIGHT]x16`.
+- Lo que no produce rune ni tiene etiqueta sale como `[VK:0xNN]`.
+- Las sesiones sin teclas no aparecen. Cada ventana cerrada queda además en `keylog.txt` del directorio de estado, con tope de 8 MB y rotación a `.1`.
+
 ## El agente
 
 - **Una instancia por equipo**, garantizada con mutex. Las copias sobrantes salen solas.

