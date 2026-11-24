@@ -4,70 +4,41 @@ package win32
 
 import "testing"
 
-func TestSpecialLabelCubreNavegacion(t *testing.T) {
-	cases := map[uint32]string{
-		0x25: "[LEFT]",
-		0x26: "[UP]",
-		0x27: "[RIGHT]",
-		0x28: "[DOWN]",
-		0x24: "[HOME]",
-		0x23: "[END]",
-		0x21: "[PGUP]",
-		0x22: "[PGDN]",
-		0x2D: "[INS]",
-		0x2E: "[DEL]",
-		0x2C: "[PRTSC]",
-		0x5D: "[MENU]",
-		0x0D: "[ENTER]",
-		0x09: "[TAB]",
-		0x08: "[BKSP]",
-		0x1B: "[ESC]",
-		0x5B: "[WIN]",
-		0x5C: "[WIN]",
-		0x70: "[F1]",
-		0x7B: "[F12]",
+func TestSilentKey(t *testing.T) {
+	mudos := []uint32{
+		vkShift, 0xA0, 0xA1,
+		vkControl, 0xA2, 0xA3,
+		vkMenu, 0xA4, 0xA5,
+		vkCapital,
+		vkTab, vkEscape,
+		vkLWin, vkRWin, 0x5D,
+		0x25, 0x26, 0x27, 0x28,
+		0x24, 0x23, 0x21, 0x22,
+		0x2D, 0x2E, 0x2C, 0x13,
+		0x90, 0x91,
+		0xAD, 0xAE, 0xAF,
+		0x70, 0x75, 0x7B, 0x87,
+		0xA6, 0xB7,
 	}
-	for vk, want := range cases {
-		got, ok := specialLabel(vk)
-		if !ok || got != want {
-			t.Fatalf("VK 0x%02X: esperado %q, obtenido %q (ok=%v)", vk, want, got, ok)
+	for _, vk := range mudos {
+		if !silentKey(vk) {
+			t.Fatalf("VK 0x%02X debería ignorarse", vk)
+		}
+	}
+
+	escriben := []uint32{'A', 'Z', '1', '0', 0x20, 0xDE, 0xBA, 0xBB, 0xBF, 0xC0}
+	for _, vk := range escriben {
+		if silentKey(vk) {
+			t.Fatalf("VK 0x%02X es imprimible y no puede ignorarse", vk)
 		}
 	}
 }
 
-func TestSpecialLabelNoInventa(t *testing.T) {
-	if label, ok := specialLabel(0xDF); ok {
-		t.Fatalf("VK 0xDF no debería tener etiqueta fija, salió %q", label)
+func TestBackspaceYEnterNoSonSilenciosas(t *testing.T) {
+	if silentKey(vkBack) {
+		t.Fatal("BKSP necesita pasar para borrar del buffer")
 	}
-}
-
-func TestCtrlCombo(t *testing.T) {
-	cases := map[string]string{
-		"[RIGHT]": "[CTRL+RIGHT]",
-		"[LEFT]":  "[CTRL+LEFT]",
-		"[F5]":    "[CTRL+F5]",
-		"[HOME]":  "[CTRL+HOME]",
-	}
-	for label, want := range cases {
-		if got := ctrlCombo(label); got != want {
-			t.Fatalf("%s: esperado %s, obtenido %s", label, want, got)
-		}
-	}
-	if ctrlComposable("[VK:0x27]") {
-		t.Fatal("[VK:0xNN] no admite prefijo CTRL")
-	}
-	if !ctrlComposable("[RIGHT]") {
-		t.Fatal("[RIGHT] debe admitir prefijo CTRL")
-	}
-}
-
-func TestModificadoresNoSonTexto(t *testing.T) {
-	for _, vk := range modifierVKs {
-		if !isModifierKey(vk) {
-			t.Fatalf("VK 0x%02X debería tratarse como modificador", vk)
-		}
-		if _, ok := specialLabel(vk); ok {
-			t.Fatalf("VK 0x%02X es modificador y no debe tener etiqueta", vk)
-		}
+	if silentKey(vkReturn) {
+		t.Fatal("ENTER necesita pasar para escribir el salto de línea")
 	}
 }

