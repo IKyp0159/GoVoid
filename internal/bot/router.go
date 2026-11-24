@@ -118,8 +118,6 @@ func handleComponent(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		commands.LockOn(s, i)
 	case customID == "btn_lock_off":
 		commands.LockOff(s, i)
-	case customID == "btn_kill":
-		showKillModal(s, i)
 	case customID == "btn_restart":
 		restartAgent(s, i)
 	case customID == "btn_ps":
