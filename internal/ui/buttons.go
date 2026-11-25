@@ -90,12 +90,14 @@ func ControlPanel() []discordgo.MessageComponent {
 			Button("🔌 Shutdown Agent", discordgo.SecondaryButton, "btn_shutdown"),
 			Button("📡 Reconectar", discordgo.SecondaryButton, "btn_reconnect"),
 			Button("🛡️ Elevate", discordgo.SecondaryButton, "btn_elevate"),
-			Button("🔒 Lock Screen", discordgo.DangerButton, "btn_lock_on"),
-			Button("🔓 Unlock", discordgo.SuccessButton, "btn_lock_off"),
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			Button("▶️ Start Keylog", discordgo.SuccessButton, "btn_keylog_start"),
 			Button("⏹ Stop Keylog", discordgo.SecondaryButton, "btn_keylog_stop"),
+		}},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			Button("🔒 Lock Screen", discordgo.DangerButton, "btn_lock_on"),
+			Button("🔓 Unlock", discordgo.SuccessButton, "btn_lock_off"),
 		}},
 	}
 }
