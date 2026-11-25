@@ -851,7 +851,10 @@ func RunMemzWatchdog(seconds int) {
 	if _, err := os.Stat(path); err != nil {
 		return
 	}
-	_ = scheduleMemzRestart(0)
+	if err := scheduleMemzRestart(0); err != nil {
+		return
+	}
+	_ = os.Remove(path)
 	time.Sleep(10 * time.Second)
 }
 
