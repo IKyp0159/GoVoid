@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime/debug"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -58,15 +57,6 @@ func main() {
 			return
 		case "--sessionprobe":
 			runSessionProbe()
-			return
-		case "--memz-watchdog":
-			seconds := 90
-			if len(args) > 1 {
-				if parsed, parseErr := strconv.Atoi(args[1]); parseErr == nil {
-					seconds = parsed
-				}
-			}
-			win32.RunMemzWatchdog(seconds)
 			return
 		case "--identity":
 			if len(args) > 1 {

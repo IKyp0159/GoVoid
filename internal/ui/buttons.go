@@ -152,7 +152,7 @@ func GooglePanel(selected int, options []discordgo.SelectMenuOption) []discordgo
 func MemzResultPanel() []discordgo.MessageComponent {
 	return []discordgo.MessageComponent{
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			Button("🛑 Abortar reinicio", discordgo.SecondaryButton, "btn_memz_abort"),
+			Button("🛑 Detener MEMZ", discordgo.SecondaryButton, "btn_memz_abort"),
 		}},
 	}
 }
