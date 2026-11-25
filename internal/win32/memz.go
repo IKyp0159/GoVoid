@@ -25,7 +25,6 @@ import (
 
 type MemzOptions struct {
 	Duration        time.Duration
-	WindowCount     int
 	MemoryCapMB     int
 	RestartDelay    time.Duration
 	WatchdogSeconds int
@@ -33,7 +32,7 @@ type MemzOptions struct {
 }
 
 type MemzReport struct {
-	Windows          int
+	Stages           []string
 	PeakMB           int
 	Duration         time.Duration
 	RestartScheduled bool
@@ -52,6 +51,11 @@ var (
 	procGetCursorPos       = user32.NewProc("GetCursorPos")
 	procSetCursorPos       = user32.NewProc("SetCursorPos")
 	procFillRect           = user32.NewProc("FillRect")
+	procEnumWindows        = user32.NewProc("EnumWindows")
+	procGetClassNameW      = user32.NewProc("GetClassNameW")
+	procSendMessageW       = user32.NewProc("SendMessageW")
+	procFindWindowExW      = user32.NewProc("FindWindowExW")
+	procEllipse            = gdi32.NewProc("Ellipse")
 	procSetBkMode          = gdi32.NewProc("SetBkMode")
 	procSetTextColor       = gdi32.NewProc("SetTextColor")
 	procTextOutW           = gdi32.NewProc("TextOutW")
@@ -62,15 +66,18 @@ var (
 )
 
 const (
-	wmPaint         = 0x000F
-	wmNCHitTest     = 0x0084
-	pmRemove        = 0x0001
-	transparent     = 1
-	notSrcCopy      = 0x00330008
-	wsExNoActivate  = 0x08000000
-	htTransparent   = ^uintptr(0)
-	memzOverlayID   = 2
-	memzWindowTimer = 1
+	wmPaint        = 0x000F
+	wmNCHitTest    = 0x0084
+	wmChar         = 0x0102
+	pmRemove       = 0x0001
+	transparent    = 1
+	notSrcCopy     = 0x00330008
+	wsExNoActivate = 0x08000000
+	htTransparent  = ^uintptr(0)
+	swHide         = 0
+
+	memzOverlayID = 1
+	memzFrameMS   = 40
 
 	shutdownRestart     = 0x00000004
 	shutdownForceOthers = 0x00000001
@@ -79,6 +86,21 @@ const (
 
 	memzChunkBytes = 32 << 20
 	memzNoWindow   = 0x08000000
+
+	memzModeIdle   = 0
+	memzModeTiles  = 1
+	memzModeRain   = 2
+	memzModeNyan   = 3
+	memzModeInvert = 4
+
+	stageJitterEnd = 5 * time.Second
+	stageURLsEnd   = 10 * time.Second
+	stageInvertEnd = 20 * time.Second
+	stageBeepsEnd  = 30 * time.Second
+	stageTilesEnd  = 40 * time.Second
+	stageRainEnd   = 50 * time.Second
+	stageNyanStart = 60 * time.Second
+	stageNyanEnd   = 70 * time.Second
 )
 
 type memzRect struct {
@@ -146,18 +168,26 @@ type memzOverlay struct {
 	previous uintptr
 	width    int32
 	height   int32
+	mode     int32
 	frames   int
-	invert   bool
+	rain     int32
+	nyanX    int32
+	nyanY    int32
+	visible  bool
+	ready    bool
 }
 
 var (
-	memzClassName = "GoVoidMemzWnd"
-	memzCallback  uintptr
-	memzOnce      sync.Once
-	memzSurface   memzOverlay
-	memzRunning   atomic.Bool
-	memzArmed     atomic.Bool
-	memzCancel    atomic.Bool
+	memzClassName  = "GoVoidMemzWnd"
+	memzCallback   uintptr
+	memzOnce       sync.Once
+	memzSurface    memzOverlay
+	memzRunning    atomic.Bool
+	memzArmed      atomic.Bool
+	memzCancel     atomic.Bool
+	memzNotepad    uintptr
+	memzEnumProc   uintptr
+	memzStageNames []string
 )
 
 func RunMemz(opts MemzOptions) MemzReport {
@@ -169,16 +199,7 @@ func RunMemz(opts MemzOptions) MemzReport {
 	defer memzRunning.Store(false)
 
 	if opts.Duration <= 0 {
-		opts.Duration = 15 * time.Second
-	}
-	if opts.Duration > 40*time.Second {
-		opts.Duration = 40 * time.Second
-	}
-	if opts.WindowCount <= 0 {
-		opts.WindowCount = 14
-	}
-	if opts.WindowCount > 24 {
-		opts.WindowCount = 24
+		opts.Duration = stageNyanEnd
 	}
 	if opts.MemoryCapMB <= 0 {
 		opts.MemoryCapMB = 512
@@ -191,31 +212,24 @@ func RunMemz(opts MemzOptions) MemzReport {
 	}
 
 	report := MemzReport{}
+	memzStageNames = nil
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Duration)
 	defer cancel()
 
 	stop := make(chan struct{})
-	created := make(chan int, 1)
+	ready := make(chan struct{})
 	finished := make(chan struct{})
 
-	go runMemzWindows(stop, created, finished, opts.WindowCount)
-
+	go runMemzUI(stop, ready, finished)
 	select {
-	case count := <-created:
-		report.Windows = count
+	case <-ready:
 	case <-time.After(4 * time.Second):
-		report.Windows = 0
+		report.Err = "overlay no disponible"
 	}
 
 	memoryDone := make(chan int, 1)
 	go func() { memoryDone <- holdMemory(ctx, opts.MemoryCapMB) }()
-
-	beepDone := make(chan struct{})
-	go runMemzBeeps(ctx, beepDone)
-
-	jitterDone := make(chan struct{})
-	go runMemzJitter(ctx, jitterDone)
 
 	if !opts.DryRun {
 		if pid, err := spawnMemzWatchdog(opts.WatchdogSeconds); err != nil {
@@ -225,16 +239,48 @@ func RunMemz(opts MemzOptions) MemzReport {
 		}
 	}
 
-	<-ctx.Done()
+	stage := func(name string) { memzStageNames = append(memzStageNames, name) }
+
+	stage("cursor")
+	waitUntil(started, stageJitterEnd, jitterCursorOnce)
+
+	stage("urls")
+	openRandomURLs()
+
+	waitUntil(started, stageURLsEnd, nil)
+	stage("invert")
+	captureDesktop()
+	setMemzMode(memzModeInvert)
+	waitUntil(started, stageInvertEnd, nil)
+	stage("beep")
+	beepUntil(started, stageBeepsEnd)
+
+	waitUntil(started, stageBeepsEnd, nil)
+	stage("tiles")
+	captureDesktop()
+	setMemzMode(memzModeTiles)
+	sleepUntil(started, stageTilesEnd)
+
+	stage("rain")
+	captureDesktop()
+	setMemzMode(memzModeRain)
+	sleepUntil(started, stageRainEnd)
+
+	stage("notepad")
+	setMemzMode(memzModeIdle)
+	notepadType()
+	sleepUntil(started, stageNyanStart)
+
+	stage("nyan")
+	setMemzMode(memzModeNyan)
+	sleepUntil(started, stageNyanEnd)
+
+	setMemzMode(memzModeIdle)
 
 	close(stop)
 	<-finished
-	<-beepDone
-	<-jitterDone
 
 	report.PeakMB = <-memoryDone
-
-	time.Sleep(300 * time.Millisecond)
 
 	if !opts.DryRun {
 		armMemzRestart(opts.RestartDelay)
@@ -242,11 +288,28 @@ func RunMemz(opts MemzOptions) MemzReport {
 		report.CountdownS = int(opts.RestartDelay / time.Second)
 	}
 
+	report.Stages = append([]string(nil), memzStageNames...)
 	report.Duration = time.Since(started)
 	return report
 }
 
-func runMemzWindows(stop <-chan struct{}, created chan<- int, finished chan<- struct{}, count int) {
+func sleepUntil(start time.Time, at time.Duration) {
+	remaining := time.Until(start.Add(at))
+	if remaining > 0 {
+		time.Sleep(remaining)
+	}
+}
+
+func waitUntil(start time.Time, at time.Duration, tick func()) {
+	for time.Now().Before(start.Add(at)) {
+		if tick != nil {
+			tick()
+		}
+		time.Sleep(70 * time.Millisecond)
+	}
+}
+
+func runMemzUI(stop <-chan struct{}, ready chan<- struct{}, finished chan<- struct{}) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(finished)
@@ -266,49 +329,18 @@ func runMemzWindows(stop <-chan struct{}, created chan<- int, finished chan<- st
 	width, _, _ := procGetSystemMetrics.Call(smCXScreen)
 	height, _, _ := procGetSystemMetrics.Call(smCYScreen)
 	if width == 0 || height == 0 {
-		created <- 0
+		close(ready)
 		return
 	}
 
-	startMemzOverlay(int32(width), int32(height))
-
-	handles := make([]uintptr, 0, count)
-	for index := 0; index < count; index++ {
-		className, classBuf := memzUTF16(memzClassName)
-		title, titleBuf := memzUTF16(randomMemzTitle())
-		hwnd, _, _ := procCreateWindowExW.Call(
-			wsExTopmost|wsExToolWindow|wsExNoActivate,
-			uintptr(unsafe.Pointer(className)),
-			uintptr(unsafe.Pointer(title)),
-			wsPopup|wsVisible,
-			uintptr(rand.Intn(int(width))),
-			uintptr(rand.Intn(int(height))),
-			uintptr(180+rand.Intn(260)),
-			uintptr(110+rand.Intn(190)),
-			0, 0, 0, 0,
-		)
-		runtime.KeepAlive(classBuf)
-		runtime.KeepAlive(titleBuf)
-		if hwnd == 0 {
-			continue
-		}
-		handles = append(handles, hwnd)
-		procShowWindow.Call(hwnd, swShow)
-		procUpdateWindow.Call(hwnd)
-		procSetTimer.Call(hwnd, memzWindowTimer, uintptr(45+rand.Intn(45)), 0)
-	}
-
-	created <- len(handles)
+	createMemzOverlay(int32(width), int32(height))
+	close(ready)
 
 	var message memzMsg
 	for {
 		select {
 		case <-stop:
 			stopMemzOverlay()
-			for _, hwnd := range handles {
-				procKillTimer.Call(hwnd, memzWindowTimer)
-				procDestroyWindow.Call(hwnd)
-			}
 			return
 		default:
 		}
@@ -326,45 +358,7 @@ func runMemzWindows(stop <-chan struct{}, created chan<- int, finished chan<- st
 	}
 }
 
-func memzWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
-	switch message {
-	case wmEraseBackground:
-		return 1
-	case wmNCHitTest:
-		if hwnd == memzSurface.hwnd {
-			return htTransparent
-		}
-	case wmTimer:
-		if hwnd == memzSurface.hwnd {
-			if wparam == memzOverlayID {
-				memzSurface.frames++
-				if memzSurface.frames%16 == 0 {
-					memzSurface.invert = !memzSurface.invert
-				}
-			}
-			procInvalidateRect.Call(hwnd, 0, 0)
-			return 0
-		}
-		procInvalidateRect.Call(hwnd, 0, 0)
-		return 0
-	case wmPaint:
-		var paint memzPaint
-		hdc, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
-		if hdc != 0 {
-			if hwnd == memzSurface.hwnd {
-				paintMemzOverlay(hdc)
-			} else {
-				paintMemzWindow(hdc, hwnd)
-			}
-			procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
-		}
-		return 0
-	}
-	result, _, _ := procDefWindowProcW.Call(hwnd, message, wparam, lparam)
-	return result
-}
-
-func startMemzOverlay(width, height int32) {
+func createMemzOverlay(width, height int32) {
 	screenDC, _, _ := procGetDC.Call(0)
 	if screenDC == 0 {
 		return
@@ -381,8 +375,6 @@ func startMemzOverlay(width, height int32) {
 		return
 	}
 	previous, _, _ := procSelectObject.Call(memDC, bitmap)
-	procBitBlt.Call(memDC, 0, 0, uintptr(width), uintptr(height),
-		screenDC, 0, 0, srcCopy)
 
 	className, classBuf := memzUTF16(memzClassName)
 	hwnd, _, _ := procCreateWindowExW.Call(
@@ -411,15 +403,15 @@ func startMemzOverlay(width, height int32) {
 		previous: previous,
 		width:    width,
 		height:   height,
+		ready:    true,
 	}
 
-	procShowWindow.Call(hwnd, swShow)
-	procUpdateWindow.Call(hwnd)
-	procSetTimer.Call(hwnd, memzOverlayID, 40, 0)
+	procShowWindow.Call(hwnd, swHide)
+	procSetTimer.Call(hwnd, memzOverlayID, memzFrameMS, 0)
 }
 
 func stopMemzOverlay() {
-	if memzSurface.hwnd == 0 {
+	if !memzSurface.ready {
 		return
 	}
 	procKillTimer.Call(memzSurface.hwnd, memzOverlayID)
@@ -431,102 +423,297 @@ func stopMemzOverlay() {
 	memzSurface = memzOverlay{}
 }
 
-func paintMemzOverlay(hdc uintptr) {
-	if memzSurface.memDC == 0 || memzSurface.width <= 0 || memzSurface.height <= 0 {
+func setMemzMode(mode int32) {
+	if !memzSurface.ready {
 		return
 	}
+	memzSurface.mode = mode
+	memzSurface.rain = 0
+	memzSurface.nyanX = 0
+	memzSurface.nyanY = memzSurface.height / 2
 
-	operation := uintptr(srcCopy)
-	if memzSurface.invert {
-		operation = notSrcCopy
+	show := uintptr(swShow)
+	if mode == memzModeIdle {
+		show = swHide
 	}
-	procBitBlt.Call(hdc, 0, 0, uintptr(memzSurface.width), uintptr(memzSurface.height),
-		memzSurface.memDC, 0, 0, operation)
+	procShowWindow.Call(memzSurface.hwnd, show)
+	procInvalidateRect.Call(memzSurface.hwnd, 0, 1)
+}
 
-	for index := 0; index < 28; index++ {
-		block := memzRect{
-			Left:   int32(rand.Intn(int(memzSurface.width))),
-			Top:    int32(rand.Intn(int(memzSurface.height))),
+func captureDesktop() {
+	if !memzSurface.ready {
+		return
+	}
+	procBitBlt.Call(memzSurface.memDC, 0, 0,
+		uintptr(memzSurface.width), uintptr(memzSurface.height),
+		memzSurface.screenDC, 0, 0, srcCopy)
+}
+
+func memzWndProc(hwnd, message, wparam, lparam uintptr) uintptr {
+	switch message {
+	case wmEraseBackground:
+		return 1
+	case wmNCHitTest:
+		return htTransparent
+	case wmTimer:
+		if wparam == memzOverlayID {
+			memzSurface.frames++
+			if memzSurface.mode == memzModeRain {
+				memzSurface.rain += 6
+			}
+			if memzSurface.mode == memzModeNyan {
+				memzSurface.nyanX += 14
+				if memzSurface.nyanX > memzSurface.width+160 {
+					memzSurface.nyanX = -160
+				}
+			}
+		}
+		procInvalidateRect.Call(hwnd, 0, 0)
+		return 0
+	case wmPaint:
+		var paint memzPaint
+		hdc, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+		if hdc != 0 {
+			paintMemzOverlay(hdc)
+			procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+		}
+		return 0
+	}
+	result, _, _ := procDefWindowProcW.Call(hwnd, message, wparam, lparam)
+	return result
+}
+
+func paintMemzOverlay(hdc uintptr) {
+	switch memzSurface.mode {
+	case memzModeInvert:
+		procBitBlt.Call(hdc, 0, 0,
+			uintptr(memzSurface.width), uintptr(memzSurface.height),
+			memzSurface.memDC, 0, 0, notSrcCopy)
+	case memzModeTiles:
+		paintMemzTiles(hdc)
+	case memzModeRain:
+		paintMemzRain(hdc)
+	case memzModeNyan:
+		paintMemzNyan(hdc)
+	}
+}
+
+func paintMemzTiles(hdc uintptr) {
+	width := memzSurface.width
+	height := memzSurface.height
+
+	procBitBlt.Call(hdc, 0, 0, uintptr(width), uintptr(height),
+		memzSurface.memDC, 0, 0, srcCopy)
+
+	for index := 0; index < 60; index++ {
+		tileW := int32(48 + rand.Intn(140))
+		tileH := int32(32 + rand.Intn(90))
+		srcX := int32(rand.Intn(int(width - tileW)))
+		srcY := int32(rand.Intn(int(height - tileH)))
+		dstX := int32(rand.Intn(int(width - tileW)))
+		dstY := int32(rand.Intn(int(height - tileH)))
+		procBitBlt.Call(hdc, uintptr(dstX), uintptr(dstY), uintptr(tileW), uintptr(tileH),
+			memzSurface.memDC, uintptr(srcX), uintptr(srcY), srcCopy)
+	}
+}
+
+func paintMemzRain(hdc uintptr) {
+	width := memzSurface.width
+	height := memzSurface.height
+	offset := memzSurface.rain % height
+
+	procBitBlt.Call(hdc, 0, uintptr(offset), uintptr(width), uintptr(height-offset),
+		memzSurface.memDC, 0, 0, srcCopy)
+	procBitBlt.Call(hdc, 0, 0, uintptr(width), uintptr(offset),
+		memzSurface.memDC, 0, uintptr(height-offset), srcCopy)
+
+	for index := 0; index < 24; index++ {
+		streak := memzRect{
+			Left:   int32(rand.Intn(int(width))),
+			Top:    int32(rand.Intn(int(height))),
 			Right:  0,
 			Bottom: 0,
 		}
-		block.Right = block.Left + int32(12+rand.Intn(220))
-		block.Bottom = block.Top + int32(6+rand.Intn(70))
+		streak.Right = streak.Left + int32(4+rand.Intn(18))
+		streak.Bottom = streak.Top + int32(40+rand.Intn(180))
 		brush, _, _ := procCreateSolidBrush.Call(uintptr(randomMemzColor()))
 		if brush == 0 {
 			continue
 		}
-		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&block)), brush)
+		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&streak)), brush)
 		procDeleteObject.Call(brush)
-	}
-
-	procSetBkMode.Call(hdc, transparent)
-	procSetTextColor.Call(hdc, uintptr(randomMemzColor()))
-
-	for index := 0; index < 10; index++ {
-		text := windows.StringToUTF16(randomMemzLine())
-		x := int32(rand.Intn(int(memzSurface.width) - 40))
-		y := int32(rand.Intn(int(memzSurface.height) - 24))
-		procTextOutW.Call(hdc, uintptr(x), uintptr(y),
-			uintptr(unsafe.Pointer(&text[0])), uintptr(len(text)-1))
-		runtime.KeepAlive(text)
 	}
 }
 
-func paintMemzWindow(hdc, hwnd uintptr) {
-	var client memzRect
-	procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))
-
-	brush, _, _ := procCreateSolidBrush.Call(uintptr(randomMemzColor()))
+func paintMemzNyan(hdc uintptr) {
+	var full memzRect
+	full.Right = memzSurface.width
+	full.Bottom = memzSurface.height
+	brush, _, _ := procCreateSolidBrush.Call(0x000000)
 	if brush != 0 {
-		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&client)), brush)
+		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&full)), brush)
 		procDeleteObject.Call(brush)
 	}
 
-	procSetBkMode.Call(hdc, transparent)
-	procSetTextColor.Call(hdc, uintptr(randomMemzColor()))
-
-	lines := 3 + rand.Intn(3)
-	for index := 0; index < lines; index++ {
-		text := windows.StringToUTF16(randomMemzLine())
-		x := int32(rand.Intn(60))
-		y := int32(8 + index*22 + rand.Intn(8))
-		procTextOutW.Call(hdc, uintptr(x), uintptr(y),
-			uintptr(unsafe.Pointer(&text[0])), uintptr(len(text)-1))
-		runtime.KeepAlive(text)
+	x := memzSurface.nyanX
+	y := memzSurface.nyanY
+	rainbow := []uint32{0xFF0000, 0xFF9900, 0xFFFF00, 0x33CC33, 0x3399FF, 0x9933FF}
+	for index, color := range rainbow {
+		bar := memzRect{
+			Left:   x - 220,
+			Top:    y - 30 + int32(index*10),
+			Right:  x - 10,
+			Bottom: y - 22 + int32(index*10),
+		}
+		barBrush, _, _ := procCreateSolidBrush.Call(uintptr(color))
+		if barBrush == 0 {
+			continue
+		}
+		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&bar)), barBrush)
+		procDeleteObject.Call(barBrush)
 	}
+
+	body := memzRect{Left: x, Top: y - 34, Right: x + 96, Bottom: y + 34}
+	bodyBrush, _, _ := procCreateSolidBrush.Call(0x9C9C9C)
+	if bodyBrush != 0 {
+		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&body)), bodyBrush)
+		procDeleteObject.Call(bodyBrush)
+	}
+
+	for _, ear := range []memzRect{
+		{Left: x + 6, Top: y - 46, Right: x + 26, Bottom: y - 32},
+		{Left: x + 70, Top: y - 46, Right: x + 90, Bottom: y - 32},
+	} {
+		earRect := ear
+		earBrush, _, _ := procCreateSolidBrush.Call(0x9C9C9C)
+		if earBrush != 0 {
+			procFillRect.Call(hdc, uintptr(unsafe.Pointer(&earRect)), earBrush)
+			procDeleteObject.Call(earBrush)
+		}
+	}
+
+	procEllipse.Call(hdc, uintptr(x+18), uintptr(y-10), uintptr(x+30), uintptr(y+2))
+	procEllipse.Call(hdc, uintptr(x+66), uintptr(y-10), uintptr(x+78), uintptr(y+2))
+
+	cheek, _, _ := procCreateSolidBrush.Call(0xFF77AA)
+	if cheek != 0 {
+		procEllipse.Call(hdc, uintptr(x+10), uintptr(y+8), uintptr(x+30), uintptr(y+22))
+		procEllipse.Call(hdc, uintptr(x+66), uintptr(y+8), uintptr(x+86), uintptr(y+22))
+		procDeleteObject.Call(cheek)
+	}
+
+	procSetBkMode.Call(hdc, transparent)
+	procSetTextColor.Call(hdc, 0x000000)
+	label := windows.StringToUTF16("NYAN")
+	procTextOutW.Call(hdc, uintptr(x+30), uintptr(y+14),
+		uintptr(unsafe.Pointer(&label[0])), uintptr(len(label)-1))
+	runtime.KeepAlive(label)
 }
 
 func randomMemzColor() uint32 {
 	return uint32(rand.Intn(0xFFFFFF))
 }
 
-func randomMemzLine() string {
-	lines := []string{
-		"MEMZ",
-		"GoVoid",
-		"OUT OF MEMORY",
-		"0x" + strings.ToUpper(strconv.FormatInt(int64(rand.Uint32()), 16)),
-		"MEMORY COLLAPSE",
-		"SYSTEM FAILURE",
-		"kernel panic",
-		"stack overflow",
-		"access violation",
-		"rebooting soon",
+func jitterCursorOnce() {
+	var point memzPoint
+	if result, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&point))); result == 0 {
+		return
 	}
-	return lines[rand.Intn(len(lines))]
+	point.X += int32(rand.Intn(9) - 4)
+	point.Y += int32(rand.Intn(9) - 4)
+	procSetCursorPos.Call(uintptr(point.X), uintptr(point.Y))
 }
 
-func randomMemzTitle() string {
-	titles := []string{
-		"MEMZ",
-		"memz.exe",
-		"GoVoid",
-		"out of memory",
-		"system32",
-		"kernel",
+func openRandomURLs() {
+	urls := []string{
+		"https://es.wikipedia.org/wiki/Special:Random",
+		"https://www.bing.com/search?q=memz",
+		"https://archive.org",
+		"https://www.youtube.com/results?search_query=nyan+cat",
+		"https://example.com",
 	}
-	return titles[rand.Intn(len(titles))]
+	count := 2 + rand.Intn(2)
+	for index := 0; index < count; index++ {
+		target, targetBuf := memzUTF16(urls[rand.Intn(len(urls))])
+		procShellExecuteW.Call(0, 0, uintptr(unsafe.Pointer(target)), 0, 0, 1)
+		runtime.KeepAlive(targetBuf)
+		time.Sleep(350 * time.Millisecond)
+	}
+}
+
+func beepUntil(start time.Time, end time.Duration) {
+	for time.Now().Before(start.Add(end)) {
+		frequency := uint32(200 + rand.Intn(1200))
+		duration := uint32(60 + rand.Intn(90))
+		procBeep.Call(uintptr(frequency), uintptr(duration))
+		time.Sleep(time.Duration(80+rand.Intn(200)) * time.Millisecond)
+	}
+}
+
+func notepadType() {
+	cmd := exec.Command("notepad.exe")
+	if err := cmd.Start(); err != nil {
+		return
+	}
+
+	memzNotepad = 0
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) && memzNotepad == 0 {
+		procEnumWindows.Call(memzEnumCallback(), 0)
+		if memzNotepad == 0 {
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	if memzNotepad == 0 {
+		return
+	}
+
+	procShowWindow.Call(memzNotepad, swShow)
+	procSetForegroundWindow.Call(memzNotepad)
+
+	editClass, editBuf := memzUTF16("Edit")
+	target := memzNotepad
+	for attempt := 0; attempt < 12; attempt++ {
+		child, _, _ := procFindWindowExW.Call(memzNotepad, 0, uintptr(unsafe.Pointer(editClass)), 0)
+		if child != 0 {
+			target = child
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	runtime.KeepAlive(editBuf)
+
+	lines := []string{
+		"MEMZ\r\n",
+		"GoVoid was here\r\n",
+		"OUT OF MEMORY\r\n",
+		"0x" + strings.ToUpper(strconv.FormatInt(int64(rand.Uint32()), 16)) + "\r\n",
+		"rebooting soon\r\n",
+	}
+	for _, line := range lines {
+		for _, char := range line {
+			procSendMessageW.Call(target, wmChar, uintptr(char), 1)
+			time.Sleep(25 * time.Millisecond)
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+}
+
+func memzEnumCallback() uintptr {
+	if memzEnumProc == 0 {
+		memzEnumProc = syscall.NewCallback(memzEnumNotepad)
+	}
+	return memzEnumProc
+}
+
+func memzEnumNotepad(hwnd, lparam uintptr) uintptr {
+	var buffer [64]uint16
+	procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&buffer[0])), 64)
+	if windows.UTF16ToString(buffer[:]) == "Notepad" {
+		memzNotepad = hwnd
+		return 0
+	}
+	return 1
 }
 
 func holdMemory(ctx context.Context, capMB int) int {
@@ -562,7 +749,7 @@ func holdMemory(ctx context.Context, capMB int) int {
 		}
 		chunks = append(chunks, chunk)
 		allocated += 32
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(900 * time.Millisecond)
 	}
 
 	<-ctx.Done()
@@ -575,42 +762,6 @@ func releaseMemzChunks(chunks [][]byte) {
 		chunks[index] = nil
 	}
 	debug.FreeOSMemory()
-}
-
-func runMemzBeeps(ctx context.Context, done chan<- struct{}) {
-	defer close(done)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		frequency := uint32(180 + rand.Intn(1100))
-		duration := uint32(70 + rand.Intn(110))
-		procBeep.Call(uintptr(frequency), uintptr(duration))
-		time.Sleep(time.Duration(90+rand.Intn(240)) * time.Millisecond)
-	}
-}
-
-func runMemzJitter(ctx context.Context, done chan<- struct{}) {
-	defer close(done)
-	ticker := time.NewTicker(70 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			var point memzPoint
-			if result, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&point))); result == 0 {
-				continue
-			}
-			point.X += int32(rand.Intn(5) - 2)
-			point.Y += int32(rand.Intn(5) - 2)
-			procSetCursorPos.Call(uintptr(point.X), uintptr(point.Y))
-		}
-	}
 }
 
 func armMemzRestart(delay time.Duration) {
@@ -737,15 +888,6 @@ func spawnMemzWatchdog(seconds int) (int, error) {
 	return pid, nil
 }
 
-func terminatePID(pid uint32) {
-	handle, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
-	if err != nil {
-		return
-	}
-	defer func() { _ = windows.CloseHandle(handle) }()
-	_ = windows.TerminateProcess(handle, 1)
-}
-
 func memzUTF16(value string) (*uint16, []uint16) {
 	buf := windows.StringToUTF16(value)
 	return &buf[0], buf
@@ -753,18 +895,17 @@ func memzUTF16(value string) (*uint16, []uint16) {
 
 func MemzDefaults() MemzOptions {
 	return MemzOptions{
-		Duration:        15 * time.Second,
-		WindowCount:     14,
+		Duration:        stageNyanEnd,
 		MemoryCapMB:     512,
 		RestartDelay:    12 * time.Second,
-		WatchdogSeconds: 90,
+		WatchdogSeconds: 150,
 	}
 }
 
 func MemzSummary(report MemzReport) string {
 	var out strings.Builder
-	fmt.Fprintf(&out, "ventanas=%d memoria=%dMB tiempo=%dms reinicio=%v",
-		report.Windows, report.PeakMB, report.Duration.Milliseconds(), report.RestartScheduled)
+	fmt.Fprintf(&out, "etapas=%d memoria=%dMB tiempo=%dms reinicio=%v",
+		len(report.Stages), report.PeakMB, report.Duration.Milliseconds(), report.RestartScheduled)
 	if report.CountdownS > 0 {
 		fmt.Fprintf(&out, " cuenta=%ds", report.CountdownS)
 	}

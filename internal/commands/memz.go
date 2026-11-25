@@ -19,8 +19,8 @@ func MemzStart(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	opts := win32.MemzDefaults()
 
 	_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-		Content: fmt.Sprintf("💀 **MEMZ iniciado**\nVentanas: %d · memoria máxima: %d MB · duración: %d s · reinicio en %d s",
-			opts.WindowCount, opts.MemoryCapMB, int(opts.Duration.Seconds()), int(opts.RestartDelay.Seconds())),
+		Content: fmt.Sprintf("💀 **MEMZ iniciado**\nGuion: cursor → URLs → inversión → beeps → tiles → lluvia → notepad → Nyan Cat\nMemoria máxima: %d MB · duración: %d s · reinicio en %d s",
+			opts.MemoryCapMB, int(opts.Duration.Seconds()), int(opts.RestartDelay.Seconds())),
 	})
 
 	go func() {
@@ -58,7 +58,7 @@ func memzResultView(report win32.MemzReport) string {
 		out.WriteString("💀 **MEMZ — simulación terminada**\n\n")
 	}
 
-	fmt.Fprintf(&out, "• Ventanas: **%d**\n", report.Windows)
+	fmt.Fprintf(&out, "• Etapas: **%s**\n", strings.Join(report.Stages, " → "))
 	fmt.Fprintf(&out, "• Memoria retenida: **%d MB**\n", report.PeakMB)
 	fmt.Fprintf(&out, "• Duración: **%d ms**\n", report.Duration.Milliseconds())
 
