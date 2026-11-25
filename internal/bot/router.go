@@ -5,19 +5,14 @@ package bot
 import (
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/local/govoid/internal/commands"
 )
-
-const createNoWindow = 0x08000000
 
 func interactionHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	defer func() {
@@ -122,8 +117,6 @@ func handleComponent(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		commands.LockOn(s, i)
 	case customID == "btn_lock_off":
 		commands.LockOff(s, i)
-	case customID == "btn_restart":
-		restartAgent(s, i)
 	case customID == "btn_ps":
 		commands.ListProcesses(s, i)
 	case customID == "btn_shutdown":
@@ -263,27 +256,6 @@ func showShutdownModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			},
 		},
 	})
-}
-
-func restartAgent(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if err := commands.Defer(s, i); err != nil {
-		return
-	}
-	commands.Finish(s, i, "🔄 Reiniciando agente…")
-
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	cmd := exec.Command(exe)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
-	if err := cmd.Start(); err != nil {
-		slog.Debug("restart: no se pudo lanzar el nuevo proceso", "err", err)
-		return
-	}
-
-	time.Sleep(500 * time.Millisecond)
-	os.Exit(0)
 }
 
 func forceReconnect(s *discordgo.Session, i *discordgo.InteractionCreate) {
