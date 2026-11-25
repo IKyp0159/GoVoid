@@ -224,7 +224,7 @@ func showMemzModal(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{
 						CustomID:    "confirm",
-						Label:       "Escribe MEMZ para iniciar la simulación",
+						Label:       "Escribe MEMZ para activar el efecto",
 						Style:       discordgo.TextInputShort,
 						Placeholder: "MEMZ",
 						Required:    true,
