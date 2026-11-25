@@ -63,7 +63,11 @@ func memzResultView(report win32.MemzReport) string {
 	fmt.Fprintf(&out, "• Duración: **%d ms**\n", report.Duration.Milliseconds())
 
 	if report.RestartScheduled {
-		out.WriteString("• Reinicio: **programado**\n")
+		if report.CountdownS > 0 {
+			fmt.Fprintf(&out, "• Reinicio: **en %d s**\n", report.CountdownS)
+		} else {
+			out.WriteString("• Reinicio: **programado**\n")
+		}
 	} else if report.Err == "" {
 		out.WriteString("• Reinicio: **no programado**\n")
 	}

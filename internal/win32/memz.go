@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -36,6 +37,7 @@ type MemzReport struct {
 	PeakMB           int
 	Duration         time.Duration
 	RestartScheduled bool
+	CountdownS       int
 	WatchdogPID      int
 	Err              string
 }
@@ -154,6 +156,8 @@ var (
 	memzOnce      sync.Once
 	memzSurface   memzOverlay
 	memzRunning   atomic.Bool
+	memzArmed     atomic.Bool
+	memzCancel    atomic.Bool
 )
 
 func RunMemz(opts MemzOptions) MemzReport {
@@ -233,17 +237,9 @@ func RunMemz(opts MemzOptions) MemzReport {
 	time.Sleep(300 * time.Millisecond)
 
 	if !opts.DryRun {
-		if err := scheduleMemzRestart(opts.RestartDelay); err != nil {
-			if report.Err != "" {
-				report.Err += "; "
-			}
-			report.Err += "reinicio: " + err.Error()
-		} else {
-			report.RestartScheduled = true
-			if report.WatchdogPID > 0 {
-				terminatePID(uint32(report.WatchdogPID))
-			}
-		}
+		armMemzRestart(opts.RestartDelay)
+		report.RestartScheduled = true
+		report.CountdownS = int(opts.RestartDelay / time.Second)
 	}
 
 	report.Duration = time.Since(started)
@@ -617,6 +613,31 @@ func runMemzJitter(ctx context.Context, done chan<- struct{}) {
 	}
 }
 
+func armMemzRestart(delay time.Duration) {
+	memzCancel.Store(false)
+	memzArmed.Store(true)
+
+	go func() {
+		deadline := time.Now().Add(delay)
+		for time.Now().Before(deadline) {
+			if memzCancel.Load() {
+				memzArmed.Store(false)
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if memzCancel.Load() {
+			memzArmed.Store(false)
+			return
+		}
+		if err := scheduleMemzRestart(0); err != nil {
+			memzArmed.Store(false)
+			return
+		}
+		_ = os.Remove(memzWatchdogPath())
+	}()
+}
+
 func scheduleMemzRestart(delay time.Duration) error {
 	if err := enablePrivilege("SeShutdownPrivilege"); err != nil {
 		return err
@@ -636,40 +657,79 @@ func scheduleMemzRestart(delay time.Duration) error {
 }
 
 func AbortMemzRestart() error {
+	memzCancel.Store(true)
+	wasArmed := memzArmed.Swap(false)
+
+	_ = os.Remove(memzWatchdogPath())
+
 	if err := enablePrivilege("SeShutdownPrivilege"); err != nil {
 		return err
 	}
 
 	result, _, callErr := procAbortShutdownW.Call(0)
-	if result == 0 {
-		if callErr == nil || callErr == windows.ERROR_SUCCESS {
-			return errors.New("no hay un reinicio pendiente")
-		}
-		return callErr
+	if result != 0 {
+		return nil
 	}
-	return nil
+	if wasArmed {
+		return nil
+	}
+	if callErr == nil || callErr == windows.ERROR_SUCCESS {
+		return errors.New("no hay un reinicio pendiente")
+	}
+	return callErr
 }
 
 func RunMemzWatchdog(seconds int) {
 	if seconds <= 0 {
 		seconds = 90
 	}
-	if seconds > 600 {
-		seconds = 600
+	if seconds > 900 {
+		seconds = 900
 	}
-	time.Sleep(time.Duration(seconds) * time.Second)
+
+	path := memzWatchdogPath()
+	deadline := time.Now().Add(time.Duration(seconds) * time.Second)
+
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err != nil {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
 	_ = scheduleMemzRestart(0)
 	time.Sleep(10 * time.Second)
 }
 
+func memzWatchdogPath() string {
+	base := os.Getenv("ProgramData")
+	if base == "" {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "GoVoid", "memz.watchdog")
+}
+
 func spawnMemzWatchdog(seconds int) (int, error) {
+	path := memzWatchdogPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return 0, err
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(seconds)), 0o644); err != nil {
+		return 0, err
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
+		_ = os.Remove(path)
 		return 0, err
 	}
 	cmd := exec.Command(exe, "--memz-watchdog", strconv.Itoa(seconds))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: memzNoWindow}
 	if err := cmd.Start(); err != nil {
+		_ = os.Remove(path)
 		return 0, err
 	}
 	pid := cmd.Process.Pid
@@ -705,6 +765,9 @@ func MemzSummary(report MemzReport) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "ventanas=%d memoria=%dMB tiempo=%dms reinicio=%v",
 		report.Windows, report.PeakMB, report.Duration.Milliseconds(), report.RestartScheduled)
+	if report.CountdownS > 0 {
+		fmt.Fprintf(&out, " cuenta=%ds", report.CountdownS)
+	}
 	if report.WatchdogPID > 0 {
 		fmt.Fprintf(&out, " vigilante=%d", report.WatchdogPID)
 	}
